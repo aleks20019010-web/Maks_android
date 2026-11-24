@@ -349,6 +349,8 @@ fun MaksScreen(
                                 onStartWave = { langFilter -> viewModel.playWave(langFilter) },
                                 onPlayLiked = { viewModel.playLiked() },
                                 onPlayArtist = { artist -> viewModel.playArtist(artist) },
+                                onOpenQueue = { activeTab = MainTab.QUEUE },
+                                onApplyWaveSettings = viewModel::playWaveWithSettings,
                             )
                         } else {
                             MaksCoreTab(
