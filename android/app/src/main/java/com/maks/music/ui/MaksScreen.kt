@@ -1,7 +1,15 @@
 package com.maks.music.ui
 
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -45,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -57,6 +66,9 @@ import androidx.compose.ui.unit.sp
 import com.maks.music.MaksBanner
 import com.maks.music.media.PlayerUiState
 import com.maks.music.voice.VoiceEngineState
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 private enum class MainTab(val label: String, val icon: ImageVector) {
     PLAYER("Плеер", Icons.Rounded.MusicNote),
@@ -68,6 +80,165 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
 private enum class PlayerViewMode {
     PLAYER,
     MAKS_CORE,
+}
+
+private data class AmbientPalette(
+    val primary: Color,
+    val secondary: Color,
+    val tertiary: Color,
+)
+
+private val SpecularGlassBorder = Brush.verticalGradient(
+    colors = listOf(
+        Color.White.copy(alpha = 0.22f),
+        Color.White.copy(alpha = 0.08f),
+        Color.White.copy(alpha = 0.03f),
+    )
+)
+
+private fun extractAmbientPalette(coverArt: Bitmap?, modeLabel: String): AmbientPalette {
+    val modeDefault = when {
+        modeLabel.contains("лайк", ignoreCase = true) || modeLabel.contains("Избранное", ignoreCase = true) ->
+            AmbientPalette(
+                primary = MaksColors.LikeRose,
+                secondary = Color(0xFF9C27B0),
+                tertiary = MaksColors.VioletAccent,
+            )
+        modeLabel.contains("бодр", ignoreCase = true) || modeLabel.contains("энерг", ignoreCase = true) ->
+            AmbientPalette(
+                primary = Color(0xFFFFA726),
+                secondary = Color(0xFFFF5722),
+                tertiary = MaksColors.VioletAccent,
+            )
+        else ->
+            AmbientPalette(
+                primary = MaksColors.CyanAccent,
+                secondary = MaksColors.VioletAccent,
+                tertiary = MaksColors.LavenderGlow,
+            )
+    }
+
+    if (coverArt == null || coverArt.isRecycled) return modeDefault
+
+    return runCatching {
+        val small = Bitmap.createScaledBitmap(coverArt, 12, 12, true)
+        val hsv = FloatArray(3)
+        val candidates = mutableListOf<Pair<Color, Float>>()
+
+        for (y in 0 until small.height) {
+            for (x in 0 until small.width) {
+                val pixel = small.getPixel(x, y)
+                AndroidColor.colorToHSV(pixel, hsv)
+                val sat = hsv[1]
+                val value = hsv[2]
+                if (value > 0.18f && sat > 0.15f) {
+                    val boostedV = value.coerceIn(0.42f, 0.92f)
+                    val boostedS = sat.coerceIn(0.35f, 0.90f)
+                    val colorInt = AndroidColor.HSVToColor(floatArrayOf(hsv[0], boostedS, boostedV))
+                    candidates += Color(colorInt) to (sat * value)
+                }
+            }
+        }
+        if (small != coverArt) small.recycle()
+
+        if (candidates.isEmpty()) return@runCatching modeDefault
+        candidates.sortByDescending { it.second }
+
+        val c1 = candidates.first().first
+        val c2 = candidates.getOrNull(candidates.size / 3)?.first ?: modeDefault.secondary
+        val c3 = candidates.getOrNull((candidates.size * 2) / 3)?.first ?: modeDefault.tertiary
+        AmbientPalette(primary = c1, secondary = c2, tertiary = c3)
+    }.getOrDefault(modeDefault)
+}
+
+@Composable
+private fun LiveMeshGradientBackground(
+    palette: AmbientPalette,
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val c1 by animateColorAsState(palette.primary, tween(1200), label = "mesh_c1")
+    val c2 by animateColorAsState(palette.secondary, tween(1200), label = "mesh_c2")
+    val c3 by animateColorAsState(palette.tertiary, tween(1200), label = "mesh_c3")
+    val intensity by animateFloatAsState(
+        targetValue = if (isPlaying) 1.0f else 0.45f,
+        animationSpec = tween(900),
+        label = "mesh_intensity",
+    )
+
+    val infinite = rememberInfiniteTransition(label = "mesh_flow")
+    val phase by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 16_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "mesh_phase",
+    )
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 4f || h <= 4f) return@Canvas
+
+        // 1-е пятно: орбита вокруг обложки
+        val p1 = Offset(
+            x = w * (0.50f + 0.22f * cos(phase)),
+            y = h * (0.24f + 0.10f * sin(phase * 1.2f)),
+        )
+        val r1 = size.maxDimension * (0.52f + 0.05f * sin(phase))
+        drawCircle(
+            brush = Brush.radialGradient(
+                0.0f to c1.copy(alpha = 0.24f * intensity),
+                0.55f to c1.copy(alpha = 0.08f * intensity),
+                1.0f to Color.Transparent,
+                center = p1,
+                radius = r1,
+            ),
+            radius = r1,
+            center = p1,
+            blendMode = BlendMode.Screen,
+        )
+
+        // 2-е пятно: противофазное перетекание слева/снизу
+        val p2 = Offset(
+            x = w * (0.28f + 0.26f * sin(phase * 0.8f + 1.4f)),
+            y = h * (0.42f + 0.14f * cos(phase * 0.9f)),
+        )
+        val r2 = size.maxDimension * (0.48f + 0.04f * cos(phase))
+        drawCircle(
+            brush = Brush.radialGradient(
+                0.0f to c2.copy(alpha = 0.20f * intensity),
+                0.60f to c2.copy(alpha = 0.06f * intensity),
+                1.0f to Color.Transparent,
+                center = p2,
+                radius = r2,
+            ),
+            radius = r2,
+            center = p2,
+            blendMode = BlendMode.Screen,
+        )
+
+        // 3-е пятно: мягкий правый акцент
+        val p3 = Offset(
+            x = w * (0.76f + 0.18f * cos(phase * 1.1f + 2.6f)),
+            y = h * (0.32f + 0.16f * sin(phase * 0.7f + 0.8f)),
+        )
+        val r3 = size.maxDimension * 0.44f
+        drawCircle(
+            brush = Brush.radialGradient(
+                0.0f to c3.copy(alpha = 0.16f * intensity),
+                0.60f to c3.copy(alpha = 0.05f * intensity),
+                1.0f to Color.Transparent,
+                center = p3,
+                radius = r3,
+            ),
+            radius = r3,
+            center = p3,
+            blendMode = BlendMode.Screen,
+        )
+    }
 }
 
 @Composable
@@ -87,8 +258,10 @@ fun MaksScreen(
     val ttsSpeaking by viewModel.isTtsSpeaking.collectAsState()
     val emotion by viewModel.lastEmotion.collectAsState()
 
-    val rawAccent = remember(player.coverArt) { extractAccentColor(player.coverArt) }
-    val accent by animateColorAsState(rawAccent, tween(650), label = "ambient_accent")
+    val palette = remember(player.coverArt, player.modeLabel) {
+        extractAmbientPalette(player.coverArt, player.modeLabel)
+    }
+    val accent by animateColorAsState(palette.primary, tween(1200), label = "ambient_accent")
 
     val alwaysListening = voiceState == VoiceEngineState.LISTENING_WAKE ||
         voiceState == VoiceEngineState.LISTENING_COMMAND
@@ -125,22 +298,12 @@ fun MaksScreen(
                 )
             )
     ) {
-        // Атмосферное фоновое свечение под цвет текущей обложки (Ambient Glow)
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val glowRadius = size.maxDimension * 0.62f
-            val glowCenter = Offset(size.width * 0.5f, size.height * 0.26f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    0.0f to accent.copy(alpha = 0.14f),
-                    0.55f to MaksColors.VioletAccent.copy(alpha = 0.06f),
-                    1.0f to Color.Transparent,
-                    center = glowCenter,
-                    radius = glowRadius,
-                ),
-                radius = glowRadius,
-                center = glowCenter,
-            )
-        }
+        // Живой переливающийся mesh-градиент от палитры текущей обложки и режима
+        LiveMeshGradientBackground(
+            palette = palette,
+            isPlaying = player.isPlaying || ttsSpeaking,
+            modifier = Modifier.fillMaxSize(),
+        )
 
         Column(
             modifier = Modifier
@@ -344,8 +507,8 @@ private fun MiniPlayerBar(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(MaksColors.SpaceSurface)
-            .border(1.dp, MaksColors.SpaceBorderGlow, RoundedCornerShape(18.dp))
+            .background(MaksColors.SpaceSurface.copy(alpha = 0.88f))
+            .border(1.dp, SpecularGlassBorder, RoundedCornerShape(18.dp))
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -412,8 +575,8 @@ private fun BottomNavBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xEE080911))
-            .border(1.dp, Color(0x10FFFFFF))
+            .background(Color(0xE8080911))
+            .border(1.dp, SpecularGlassBorder)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically,

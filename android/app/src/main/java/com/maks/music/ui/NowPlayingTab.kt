@@ -2,15 +2,20 @@ package com.maks.music.ui
 
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -60,13 +65,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -80,6 +90,7 @@ import com.maks.music.media.PlayerUiState
 import com.maks.music.media.RepeatMode
 import com.maks.music.voice.VoiceEngineState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -91,6 +102,30 @@ private enum class WaveLangMode(val label: String, val filter: String?) {
     FOREIGN("Зарубежная", "not-russian"),
 }
 
+private val GlassSpecularBorder = Brush.verticalGradient(
+    colors = listOf(
+        Color.White.copy(alpha = 0.22f),
+        Color.White.copy(alpha = 0.08f),
+        Color.White.copy(alpha = 0.03f),
+    )
+)
+
+private fun Modifier.fadingEdgeMarquee(): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.horizontalGradient(
+                0.0f to Color.Transparent,
+                0.04f to Color.Black,
+                0.92f to Color.Black,
+                1.0f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun NowPlayingTab(
     player: PlayerUiState,
@@ -147,7 +182,7 @@ internal fun NowPlayingTab(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // 1. Верхняя панель: переключатель «Плеер ↔ Ядро Макса» + EQ, микрофон и выключение
+        // 1. Верхняя панель
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -194,7 +229,7 @@ internal fun NowPlayingTab(
             }
         }
 
-        // 2. Центральный круговой циферблат со свайпом и двойным тапом для лайка
+        // 2. Центральный круговой циферблат с «дышащей» обложкой на пружинной физике
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -204,6 +239,7 @@ internal fun NowPlayingTab(
         ) {
             CircularArtworkDial(
                 progress = sliderFraction,
+                isPlaying = player.isPlaying,
                 accent = accent,
                 coverArt = player.coverArt,
                 trackTitle = player.currentTrack?.title,
@@ -256,7 +292,7 @@ internal fun NowPlayingTab(
             }
         }
 
-        // 3. Название трека + Кликабельный Артист + Дизлайк / Сердце
+        // 3. Бегущая строка названия трека + Кликабельный Артист + Дизлайк / Пружинный Лайк
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -270,19 +306,35 @@ internal fun NowPlayingTab(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.2).sp,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fadingEdgeMarquee()
+                        .basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            initialDelayMillis = 2200,
+                            velocity = 34.dp,
+                        ),
                 )
                 Spacer(Modifier.height(2.dp))
                 val curTrack = player.currentTrack
                 if (curTrack != null && curTrack.artist.isNotBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fadingEdgeMarquee()
+                            .basicMarquee(
+                                iterations = Int.MAX_VALUE,
+                                initialDelayMillis = 2800,
+                                velocity = 30.dp,
+                            ),
+                    ) {
                         Text(
                             text = curTrack.artist,
                             color = MaksColors.LavenderGlow.copy(alpha = 0.90f),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable {
@@ -297,7 +349,6 @@ internal fun NowPlayingTab(
                                 color = MaksColors.TextMuted,
                                 fontSize = 13.sp,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -326,20 +377,14 @@ internal fun NowPlayingTab(
                     modifier = Modifier.size(20.dp),
                 )
             }
-            IconButton(
+
+            AnimatedLikeButton(
+                isLiked = player.isCurrentLiked,
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onToggleLike()
                 },
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    imageVector = if (player.isCurrentLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = "Нравится",
-                    tint = if (player.isCurrentLiked) MaksColors.LikeRose else MaksColors.TextSecondary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
+            )
         }
 
         if (!hasAudioPermission || player.libraryCount == 0) {
@@ -347,8 +392,8 @@ internal fun NowPlayingTab(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(MaksColors.SpaceSurface)
-                    .border(1.dp, MaksColors.SpaceBorderGlow, RoundedCornerShape(14.dp))
+                    .background(MaksColors.SpaceSurface.copy(alpha = 0.85f))
+                    .border(1.dp, GlassSpecularBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -376,7 +421,7 @@ internal fun NowPlayingTab(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaksColors.SpaceSurfaceElevated)
-                        .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(10.dp))
+                        .border(1.dp, GlassSpecularBorder, RoundedCornerShape(10.dp))
                         .clickable { onPickMusicFolder() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 ) {
@@ -471,14 +516,14 @@ internal fun NowPlayingTab(
             )
         }
 
-        // 6. Нижняя сдвоенная панель: «Моя волна / Русская / Зарубежная» | «Избранное»
+        // 6. Нижняя сдвоенная панель со спекулярным стеклянным бликом
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .background(MaksColors.SpaceSurface)
-                .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(18.dp)),
+                .background(MaksColors.SpaceSurface.copy(alpha = 0.85f))
+                .border(1.dp, GlassSpecularBorder, RoundedCornerShape(18.dp)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
@@ -518,7 +563,7 @@ internal fun NowPlayingTab(
                 modifier = Modifier
                     .width(1.dp)
                     .height(22.dp)
-                    .background(MaksColors.SpaceBorder)
+                    .background(Color.White.copy(alpha = 0.12f))
             )
 
             Row(
@@ -554,8 +599,63 @@ internal fun NowPlayingTab(
 }
 
 @Composable
+private fun AnimatedLikeButton(
+    isLiked: Boolean,
+    onClick: () -> Unit,
+) {
+    val heartScale = remember { Animatable(1f) }
+    val ringProgress = remember { Animatable(0f) }
+
+    LaunchedEffect(isLiked) {
+        if (isLiked) {
+            launch {
+                heartScale.snapTo(1f)
+                heartScale.animateTo(1.28f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium))
+                heartScale.animateTo(1f, spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessLow))
+            }
+            launch {
+                ringProgress.snapTo(0.05f)
+                ringProgress.animateTo(1f, tween(420))
+                ringProgress.snapTo(0f)
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier.size(42.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (ringProgress.value > 0.01f) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val p = ringProgress.value
+                val radius = (size.minDimension * 0.22f) + (size.minDimension * 0.30f * p)
+                drawCircle(
+                    color = MaksColors.LikeRose.copy(alpha = (1f - p) * 0.65f),
+                    radius = radius,
+                    style = Stroke(width = (2.5.dp.toPx() * (1f - p * 0.5f))),
+                )
+            }
+        }
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.size(40.dp),
+        ) {
+            Icon(
+                imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = "Нравится",
+                tint = if (isLiked) MaksColors.LikeRose else MaksColors.TextSecondary,
+                modifier = Modifier
+                    .size(22.dp)
+                    .scale(heartScale.value),
+            )
+        }
+    }
+}
+
+@Composable
 private fun CircularArtworkDial(
     progress: Float,
+    isPlaying: Boolean,
     accent: Color,
     coverArt: Bitmap?,
     trackTitle: String?,
@@ -581,6 +681,21 @@ private fun CircularArtworkDial(
             showLikeBurst = false
         }
     }
+
+    val artworkScale by animateFloatAsState(
+        targetValue = if (isPlaying) 1.0f else 0.88f,
+        animationSpec = spring(
+            dampingRatio = 0.65f,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "artwork_breathing_scale",
+    )
+
+    val glowAlpha by animateFloatAsState(
+        targetValue = if (isPlaying) 1.0f else 0.35f,
+        animationSpec = tween(420),
+        label = "artwork_glow_alpha",
+    )
 
     val animatedOffsetX by animateFloatAsState(
         targetValue = rawDragX.coerceIn(-120f, 120f),
@@ -623,13 +738,13 @@ private fun CircularArtworkDial(
 
             drawCircle(
                 brush = Brush.radialGradient(
-                    0.55f to MaksColors.VioletAccent.copy(alpha = 0.14f),
-                    0.82f to accent.copy(alpha = 0.08f),
+                    0.50f to accent.copy(alpha = 0.24f * glowAlpha),
+                    0.78f to MaksColors.VioletAccent.copy(alpha = 0.12f * glowAlpha),
                     1.0f to Color.Transparent,
                     center = center,
-                    radius = minDim * 0.495f,
+                    radius = minDim * 0.498f,
                 ),
-                radius = minDim * 0.495f,
+                radius = minDim * 0.498f,
                 center = center,
             )
 
@@ -671,7 +786,7 @@ private fun CircularArtworkDial(
                     useCenter = false,
                     topLeft = arcTopLeft,
                     size = arcSize,
-                    alpha = 0.34f,
+                    alpha = 0.34f * glowAlpha,
                     style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
                 )
                 drawArc(
@@ -706,6 +821,7 @@ private fun CircularArtworkDial(
         Box(
             modifier = Modifier
                 .offset { IntOffset((animatedOffsetX * 0.45f).roundToInt(), 0) }
+                .scale(artworkScale)
                 .fillMaxSize(0.75f)
                 .clip(CircleShape)
                 .background(
@@ -713,7 +829,7 @@ private fun CircularArtworkDial(
                         listOf(Color(0xFF14182B), Color(0xFF0A0C16))
                     )
                 )
-                .border(1.dp, Color(0x24FFFFFF), CircleShape)
+                .border(1.dp, GlassSpecularBorder, CircleShape)
                 .pointerInput(coverArt != null) {
                     detectTapGestures(
                         onDoubleTap = {
@@ -772,7 +888,7 @@ private fun CircularArtworkDial(
                     .size(48.dp)
                     .clip(CircleShape)
                     .background(Color(0xE00A0C16))
-                    .border(1.dp, MaksColors.SpaceBorderGlow, CircleShape)
+                    .border(1.dp, GlassSpecularBorder, CircleShape)
                     .clickable { onTapOrb() },
                 contentAlignment = Alignment.Center,
             ) {

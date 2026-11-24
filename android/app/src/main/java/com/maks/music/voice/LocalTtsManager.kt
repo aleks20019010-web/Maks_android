@@ -16,10 +16,8 @@ import java.util.UUID
 
 /**
  * 100% локальный синтез речи на встроенном Android TextToSpeech (ru-RU).
- * Заменяет Yandex SpeechKit TTS:
- *   - применяет speechRate / speechPitch из PersonalityEngine
- *   - сохраняет интонационные паузы sil<[ms]> через playSilentUtterance()
- *   - гарантированно приглушает музыку (duck/restore) на Main-потоке для ExoPlayer.
+ * Произносит ответ цельной фразой с естественной пунктуацией, чтобы Android TTS
+ * не обрывал интонацию на каждом sil<[ms]>, и гарантированно приглушает музыку (duck/restore).
  */
 class LocalTtsManager(
     context: Context,
@@ -108,10 +106,9 @@ class LocalTtsManager(
     fun speak(reply: MaksReply) {
         val engine = tts ?: return
         if (!isReady) return
-        val chunks = reply.speechChunks
-        if (chunks.isEmpty()) return
+        val textToSpeak = reply.displayText.trim()
+        if (textToSpeak.isEmpty()) return
 
-        // Начинаем приглушать музыку сразу на Main-потоке за 100 мс до первого звука речи
         notifySpeechStarted()
 
         engine.setSpeechRate(reply.speechRate)
@@ -121,20 +118,9 @@ class LocalTtsManager(
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
         }
 
-        var finalId: String? = null
-        chunks.forEachIndexed { idx, chunk ->
-            val mode = if (idx == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-            val uid = "maks_${UUID.randomUUID()}"
-            finalId = uid
-            engine.speak(chunk.text, mode, params, uid)
-
-            if (chunk.pauseAfterMs > 0L && idx < chunks.lastIndex) {
-                val silId = "maks_sil_${UUID.randomUUID()}"
-                finalId = silId
-                engine.playSilentUtterance(chunk.pauseAfterMs, TextToSpeech.QUEUE_ADD, silId)
-            }
-        }
-        lastUtteranceId = finalId
+        val uid = "maks_${UUID.randomUUID()}"
+        lastUtteranceId = uid
+        engine.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, params, uid)
     }
 
     fun stop() {
