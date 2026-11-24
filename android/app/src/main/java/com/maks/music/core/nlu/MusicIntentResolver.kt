@@ -1,4 +1,4 @@
-package com.maks.music.core.nlu
+﻿package com.maks.music.core.nlu
 
 import com.maks.music.core.AssetProvider
 import com.maks.music.core.Phonetic
@@ -10,9 +10,10 @@ import kotlinx.serialization.json.jsonPrimitive
 /**
  * Оффлайн-классификатор музыкальных интентов без тяжелых нейросетей (~0.3 мс):
  *   1. Приоритетные правила локальных лайков («включи мою музыку», «мои лайки», «любимое»)
- *   2. Точное совпадение по config/intent_routes_music.json
- *   3. Явные правила: VOLUME_SET, LIKE/DISLIKE, MUSIC_WAVE, play_triggers → MUSIC_PLAY
- *   4. Fuzzy-поиск (Levenshtein ratio) по всем музыкальным фразам (порог 0.80)
+ *   2. Явные лайки / дизлайки текущего трека
+ *   3. Точное совпадение по config/intent_routes_music.json
+ *   4. Явные правила: VOLUME_SET, MUSIC_WAVE, play_triggers → MUSIC_PLAY
+ *   5. Fuzzy-поиск (Levenshtein ratio) по всем музыкальным фразам (порог 0.80)
  */
 class MusicIntentResolver(
     assets: AssetProvider,
@@ -65,7 +66,7 @@ class MusicIntentResolver(
             return MusicIntent.MUSIC_LOCAL_LIKED to 0.98
         }
 
-        // 2. Явные лайки / дизлайки текущего трека (важно: «в любимые» проверяем до exactMap)
+        // 2. Явные лайки / дизлайки текущего трека
         if (text.contains("не нравится") || text.contains("дизлайк") || text.contains("убери трек") || text.contains("больше не ставь")) {
             return MusicIntent.MUSIC_DISLIKE to 0.96
         }
