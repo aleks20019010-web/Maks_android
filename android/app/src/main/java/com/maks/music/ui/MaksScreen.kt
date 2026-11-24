@@ -25,11 +25,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
@@ -62,7 +62,7 @@ private enum class MainTab(val label: String, val icon: ImageVector) {
     PLAYER("Плеер", Icons.Rounded.MusicNote),
     EQ("EQ Studio", Icons.Rounded.Tune),
     LIBRARY("Медиатека", Icons.Rounded.LibraryMusic),
-    QUEUE("Очередь", Icons.Rounded.QueueMusic),
+    QUEUE("Очередь", Icons.AutoMirrored.Rounded.QueueMusic),
 }
 
 private enum class PlayerViewMode {

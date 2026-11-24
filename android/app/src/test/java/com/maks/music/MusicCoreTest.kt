@@ -22,10 +22,6 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 
-/**
- * Юнит-тесты музыкального ядра Макса (порт ключевых проверок из Python pytest).
- * Работают на чистой JVM без эмулятора Android.
- */
 class MusicCoreTest {
 
     private lateinit var pipeline: NluPipeline
@@ -42,7 +38,7 @@ class MusicCoreTest {
         )
 
         override fun trackIndex(): Map<String, String> = mapOf(
-            "рок" to "НАИВ — Рок", // Проверка FIX 2026-11-20: жанр «рок» важнее одноимённого трека!
+            "рок" to "НАИВ — Рок",
             "шторм" to "Ария — Шторм",
         )
     }
@@ -93,12 +89,10 @@ class MusicCoreTest {
         assertEquals("play_wave", rusWave.command.action)
         assertEquals("russian", rusWave.command.entity?.language)
 
-        // «арию» → падежная нормализация → «Ария»
         val artist = pipeline.process("включи Арию")
         assertEquals("play_artist", artist.command.action)
         assertEquals("Ария", artist.command.entity?.value)
 
-        // FIX 2026-11-20: жанр важнее одноимённого локального трека «НАИВ — Рок»
         val genre = pipeline.process("включи рок")
         assertEquals("play_genre", genre.command.action)
         assertEquals("genre:rusrock", genre.command.entity?.value)
@@ -145,6 +139,7 @@ class MusicCoreTest {
         assertEquals("like_current", pipeline.process("лайк").command.action)
         assertEquals("dislike_current", pipeline.process("не нравится").command.action)
         assertEquals("play_local_liked", pipeline.process("включи мои лайки").command.action)
+        assertEquals("play_local_liked", pipeline.process("включи мою музыку").command.action)
         assertEquals("now_playing", pipeline.process("что сейчас играет").command.action)
 
         val vol = pipeline.process("громкость пятьдесят")
@@ -162,7 +157,6 @@ class MusicCoreTest {
         assertTrue(third.shouldReact)
         assertEquals("APPRAISAL_SKIP_3X", third.phraseSet)
 
-        // Cooldown: следующие 3 скипа сразу не должны спамить
         assertFalse(policy.onTrackSkipped("Ария", nowMs = 4_000L).shouldReact)
         assertFalse(policy.onTrackSkipped("Ария", nowMs = 5_000L).shouldReact)
         assertFalse(policy.onTrackSkipped("Ария", nowMs = 6_000L).shouldReact)
