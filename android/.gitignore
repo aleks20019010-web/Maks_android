@@ -1,0 +1,16 @@
+# Gradle & Android build outputs
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# Secrets & keystores
+*.jks
+*.keystore
+
+# Large offline Vosk model (downloaded automatically in GitHub Actions or copied manually)
+app/src/main/assets/models/vosk-model-small-ru-0.22/

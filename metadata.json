@@ -1,0 +1,5 @@
+{
+  "name": "Макс Музыка — Локальный Android-порт",
+  "description": "Интерактивный симулятор локального музыкального ядра Макса и автономный Android-проект (Kotlin + Jetpack Compose + Media3 + Vosk) со сборкой APK на GitHub Actions.",
+  "requestFramePermissions": ["microphone"]
+}

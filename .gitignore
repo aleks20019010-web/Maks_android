@@ -1,0 +1,39 @@
+# ===== Android & Gradle =====
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+android/captures/
+android/.cxx/
+android/.externalNativeBuild/
+
+# ===== Signing & Secrets =====
+*.jks
+*.keystore
+*.key
+.env
+.env.local
+
+# ===== Offline Vosk Model (downloaded in CI or placed locally) =====
+android/app/src/main/assets/models/vosk-model-small-ru-0.22/
+
+# ===== Build Outputs =====
+dist-apk/
+*.apk
+*.aab
+
+# ===== Web Preview Simulator =====
+node_modules/
+dist/
+
+# ===== IDE & OS =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
