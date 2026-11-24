@@ -1,4 +1,35 @@
 {
+  "PLAY_WAVE": [
+    {"text": "Включ+аю в+ашу волн+у", "style": "normal", "weight": 2.5, "emotion": "good"},
+    {"text": "Запуск+аю в+ашу волн+у", "style": "normal", "weight": 2.0, "emotion": "good"},
+    {"text": "Сейч+ас собер+у п+одборку по в+ашему вк+усу", "style": "friendly", "weight": 1.8, "emotion": "good"},
+    {"text": "По+ехали sil<[150]> В+аша в+олна", "style": "friendly", "rate": "+5%", "weight": 1.8, "emotion": "good"},
+    {"text": "Сейч+ас б+удет м+узыка", "style": "normal", "weight": 1.5, "emotion": "good"},
+    {"text": "Подбир+аю треки под н+астроение", "style": "friendly", "weight": 1.5, "emotion": "good"},
+    {"text": "В эф+ире в+аша в+олна", "style": "formal", "weight": 1.2, "emotion": "neutral"},
+    {"text": "Гот+ово sil<[150]> В+аша в+олна в эф+ире", "style": "normal", "weight": 1.2, "emotion": "good"},
+    {"text": "Настр+аиваюсь на в+ашу волн+у", "style": "friendly", "weight": 1.2, "emotion": "good"},
+    {"text": "Включ+аю в+ашу волн+у sil<[150]> Т+ихо", "style": "night", "night": true, "rate": "-12%", "pitch": "-12Hz", "weight": 2.0, "emotion": "neutral"},
+    {"text": "Ночн+ой эф+ир sil<[150]> Потиш+е", "style": "night", "night": true, "rate": "-12%", "pitch": "-10Hz", "weight": 1.5, "emotion": "neutral"}
+  ],
+  "PLAY_WAVE_RUSSIAN": [
+    {"text": "Включ+аю р+усскую волн+у", "style": "normal", "weight": 2.5, "emotion": "good"},
+    {"text": "Ст+авлю н+ашу м+узыку", "style": "friendly", "weight": 2.0, "emotion": "good"},
+    {"text": "Запуск+аю р+усскую волн+у", "style": "normal", "weight": 2.0, "emotion": "good"},
+    {"text": "Р+усская в+олна sil<[150]> По+ехали", "style": "friendly", "rate": "+5%", "weight": 1.8, "emotion": "good"},
+    {"text": "Подбир+аю р+усские треки", "style": "normal", "weight": 1.5, "emotion": "good"},
+    {"text": "Сейч+ас б+удет н+аша м+узыка", "style": "friendly", "weight": 1.5, "emotion": "good"},
+    {"text": "В эф+ире р+усская в+олна", "style": "formal", "weight": 1.2, "emotion": "neutral"},
+    {"text": "Р+усская в+олна sil<[150]> Т+ихо", "style": "night", "night": true, "rate": "-12%", "pitch": "-12Hz", "weight": 2.0, "emotion": "neutral"}
+  ],
+  "PLAY_WAVE_FOREIGN": [
+    {"text": "Включ+аю заруб+ежную волн+у", "style": "normal", "weight": 2.5, "emotion": "good"},
+    {"text": "Запуск+аю иностр+анную м+узыку", "style": "normal", "weight": 2.0, "emotion": "good"},
+    {"text": "Заруб+ежная в+олна sil<[150]> По+ехали", "style": "friendly", "rate": "+5%", "weight": 1.8, "emotion": "good"},
+    {"text": "Подбир+аю заруб+ежные треки", "style": "normal", "weight": 1.5, "emotion": "good"},
+    {"text": "В эф+ире заруб+ежная в+олна", "style": "formal", "weight": 1.2, "emotion": "neutral"},
+    {"text": "Заруб+ежная в+олна sil<[150]> Т+ихо", "style": "night", "night": true, "rate": "-12%", "pitch": "-12Hz", "weight": 2.0, "emotion": "neutral"}
+  ],
   "PLAY_MOOD": [
     {"text": "Включ+аю {mood}", "style": "normal", "weight": 2.0, "emotion": "good"},
     {"text": "Ок sil<[150]> {mood}", "style": "normal", "weight": 1.5, "emotion": "good"},

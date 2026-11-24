@@ -2,10 +2,17 @@ package com.maks.music.voice
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,15 +40,6 @@ enum class VoiceEngineState {
     ERROR,
 }
 
-/**
- * 100% оффлайн-распознавание голоса на базе Vosk (vosk-model-small-ru-0.22):
- *   - аппаратное эхоподавление AcousticEchoCanceler (замена echoff)
- *   - wake-word «макс» → открывает окно команды (8 сек) + приглушает музыку
- *   - слитные фразы «макс включи русскую музыку» → выполняются сразу без лишнего «Слушаю»
- *   - быстрые hot-words без wake-word («дальше», «назад», «пауза», «продолжи», «стоп», «тише», «громче»)
- *   - Push-to-Talk режим (нажатие кнопки микрофона сразу слушает команду)
- *   - телеметрия уровня микрофона micLevel (0..1) для плазменного аватара.
- */
 class OfflineVoiceEngine(
     private val context: Context,
     private val isTtsSpeaking: () -> Boolean,
@@ -50,6 +48,7 @@ class OfflineVoiceEngine(
     private val onListeningWindowChanged: (active: Boolean) -> Unit,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     private val _state = MutableStateFlow(VoiceEngineState.IDLE)
     val state: StateFlow<VoiceEngineState> = _state.asStateFlow()
@@ -74,7 +73,29 @@ class OfflineVoiceEngine(
     @Volatile
     private var lastWakeAtMs: Long = 0L
 
-    /** Фоновая распаковка и прогрев оффлайн-модели Vosk при старте приложения. */
+    @Volatile
+    private var activeRecorder: AudioRecord? = null
+
+    @Volatile
+    private var usingHeadsetMic: Boolean = false
+
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            activeRecorder?.let { routeToPreferredMic(it) }
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            activeRecorder?.let { routeToPreferredMic(it) }
+        }
+    }
+
+    init {
+        audioManager?.registerAudioDeviceCallback(
+            audioDeviceCallback,
+            Handler(Looper.getMainLooper())
+        )
+    }
+
     fun preloadModelAsync() {
         scope.launch {
             val loaded = ensureModelLoaded()
@@ -92,7 +113,6 @@ class OfflineVoiceEngine(
         }
     }
 
-    /** Включить принудительное окно прослушки команды (кнопка микрофона на экране). */
     fun triggerPushToTalk() {
         val now = System.currentTimeMillis()
         commandWindowUntilMs = now + COMMAND_WINDOW_MS
@@ -124,10 +144,68 @@ class OfflineVoiceEngine(
     }
 
     fun release() {
+        runCatching { audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback) }
         stop()
         synchronized(modelLock) {
             runCatching { voskModel?.close() }
             voskModel = null
+        }
+    }
+
+    private fun routeToPreferredMic(recorder: AudioRecord) {
+        val am = audioManager ?: return
+        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+
+        val wiredHeadset = inputs.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+        }
+        val btHeadset = inputs.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+
+        val targetMic = wiredHeadset ?: btHeadset
+        if (targetMic != null) {
+            recorder.setPreferredDevice(targetMic)
+            usingHeadsetMic = true
+        } else {
+            recorder.setPreferredDevice(null)
+            usingHeadsetMic = false
+        }
+    }
+
+    private fun setBluetoothMicActive(active: Boolean) {
+        val am = audioManager ?: return
+        val hasBtSco = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .any {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+            }
+        if (!hasBtSco) return
+
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (active) {
+                    val commDevice = am.availableCommunicationDevices
+                        .firstOrNull {
+                            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                        }
+                    if (commDevice != null) am.setCommunicationDevice(commDevice)
+                } else {
+                    am.clearCommunicationDevice()
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                if (active) {
+                    am.startBluetoothSco()
+                    am.isBluetoothScoOn = true
+                } else {
+                    am.isBluetoothScoOn = false
+                    am.stopBluetoothSco()
+                }
+            }
         }
     }
 
@@ -199,6 +277,31 @@ class OfflineVoiceEngine(
     }
 
     @SuppressLint("MissingPermission")
+    private fun createBestRecorder(minBuf: Int): AudioRecord? {
+        val sources = listOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        )
+        for (src in sources) {
+            val rec = runCatching {
+                AudioRecord(
+                    src,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    minBuf * 2
+                )
+            }.getOrNull()
+            if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+                return rec
+            }
+            runCatching { rec?.release() }
+        }
+        return null
+    }
+
+    @SuppressLint("MissingPermission")
     private fun runAudioLoop(model: Model, pushToTalkOnly: Boolean) {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
@@ -206,26 +309,26 @@ class OfflineVoiceEngine(
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4096)
 
-        val recorder = runCatching {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBuf * 2
-            )
-        }.getOrNull()
-
-        if (recorder == null || recorder.state != AudioRecord.STATE_INITIALIZED) {
-            runCatching { recorder?.release() }
+        val recorder = createBestRecorder(minBuf)
+        if (recorder == null) {
             _state.value = VoiceEngineState.ERROR
             return
         }
+
+        activeRecorder = recorder
+        routeToPreferredMic(recorder)
 
         var aec: AcousticEchoCanceler? = null
         if (AcousticEchoCanceler.isAvailable()) {
             aec = runCatching {
                 AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
+            }.getOrNull()
+        }
+
+        var agc: AutomaticGainControl? = null
+        if (AutomaticGainControl.isAvailable()) {
+            agc = runCatching {
+                AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true }
             }.getOrNull()
         }
 
@@ -245,20 +348,26 @@ class OfflineVoiceEngine(
                     continue
                 }
 
+                val currentGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
                 var sumSq = 0.0
                 for (i in 0 until read) {
-                    val s = buffer[i].toDouble() / 32768.0
+                    val amplified = (buffer[i] * currentGain).toInt()
+                        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    buffer[i] = amplified.toShort()
+                    val s = amplified.toDouble() / 32768.0
                     sumSq += s * s
                 }
                 val rms = sqrt(sumSq / read).toFloat()
-                _micLevel.value = (rms * 5.5f).coerceIn(0f, 1f)
+                _micLevel.value = (rms * 4.5f).coerceIn(0f, 1f)
 
                 val now = System.currentTimeMillis()
                 val inCommandWindow = now < commandWindowUntilMs
 
                 if (inCommandWindow && _state.value != VoiceEngineState.LISTENING_COMMAND) {
                     _state.value = VoiceEngineState.LISTENING_COMMAND
+                    setBluetoothMicActive(true)
                 } else if (!inCommandWindow && _state.value == VoiceEngineState.LISTENING_COMMAND) {
+                    setBluetoothMicActive(false)
                     onListeningWindowChanged(false)
                     if (pushToTalkOnly) break
                     _state.value = VoiceEngineState.LISTENING_WAKE
@@ -271,6 +380,7 @@ class OfflineVoiceEngine(
                         handleRecognizedText(text, inCommandWindow)
                         if (pushToTalkOnly) {
                             commandWindowUntilMs = 0L
+                            setBluetoothMicActive(false)
                             onListeningWindowChanged(false)
                             break
                         }
@@ -278,8 +388,6 @@ class OfflineVoiceEngine(
                 } else {
                     val partial = extractField(recognizer.partialResult, "partial")
                     if (!inCommandWindow && partial.isNotEmpty()) {
-                        // В partial реагируем только на мгновенные hot-words управления («стоп», «дальше», «пауза»),
-                        // а wake-word «макс» дожидаемся в isFinal, чтобы не обрывать слитную команду «Макс включи...»
                         if (partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
                             lastHotWordAtMs = now
                             recognizer.reset()
@@ -289,9 +397,12 @@ class OfflineVoiceEngine(
                 }
             }
         } finally {
+            setBluetoothMicActive(false)
+            activeRecorder = null
             runCatching { recorder.stop() }
             runCatching { recorder.release() }
             runCatching { aec?.release() }
+            runCatching { agc?.release() }
             runCatching { recognizer.close() }
             _micLevel.value = 0f
             if (_state.value != VoiceEngineState.MODEL_MISSING && _state.value != VoiceEngineState.ERROR) {
@@ -305,20 +416,20 @@ class OfflineVoiceEngine(
         val text = raw.lowercase().trim()
         if (text.isEmpty()) return
 
-        // 1. Внутри фразы есть «макс ...» → вырезаем всё после wake-word и выполняем сразу
         val afterWake = stripWakeWord(text)
         if (afterWake != null) {
             if (afterWake.isNotEmpty()) {
                 commandWindowUntilMs = 0L
+                setBluetoothMicActive(false)
                 onListeningWindowChanged(false)
                 onCommandRecognized(afterWake, false)
             } else {
-                // Сказали только «Макс» → открываем окно прослушки команды (с защитой от дублей)
                 val now = System.currentTimeMillis()
                 if (now - lastWakeAtMs > WAKE_DEBOUNCE_MS) {
                     lastWakeAtMs = now
                     commandWindowUntilMs = now + COMMAND_WINDOW_MS
                     _state.value = VoiceEngineState.LISTENING_COMMAND
+                    setBluetoothMicActive(true)
                     onListeningWindowChanged(true)
                     onWakeDetected()
                 }
@@ -326,7 +437,6 @@ class OfflineVoiceEngine(
             return
         }
 
-        // 2. Быстрые hot-words работают без wake-word
         if (text in HOT_WORDS) {
             val now = System.currentTimeMillis()
             if (now - lastHotWordAtMs > HOT_DEBOUNCE_MS) {
@@ -336,9 +446,9 @@ class OfflineVoiceEngine(
             return
         }
 
-        // 3. Если открыто окно команды — отправляем свободную команду в MusicRouter
         if (wasInCommandWindow) {
             commandWindowUntilMs = 0L
+            setBluetoothMicActive(false)
             onListeningWindowChanged(false)
             onCommandRecognized(text, false)
         }
@@ -360,6 +470,8 @@ class OfflineVoiceEngine(
         private const val COMMAND_WINDOW_MS = 8_000L
         private const val HOT_DEBOUNCE_MS = 1_500L
         private const val WAKE_DEBOUNCE_MS = 2_500L
+        private const val TABLE_MIC_GAIN = 2.8f
+        private const val HEADSET_MIC_GAIN = 1.35f
         const val MODEL_FOLDER = "vosk-model-small-ru-0.22"
 
         private val WAKE_WORDS = setOf("макс", "макса", "максу")

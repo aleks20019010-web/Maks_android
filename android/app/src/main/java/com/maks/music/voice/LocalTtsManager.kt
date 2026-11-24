@@ -3,6 +3,8 @@ package com.maks.music.voice
 import android.content.Context
 import android.media.AudioAttributes
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.maks.music.core.personality.MaksReply
@@ -17,13 +19,15 @@ import java.util.UUID
  * Заменяет Yandex SpeechKit TTS:
  *   - применяет speechRate / speechPitch из PersonalityEngine
  *   - сохраняет интонационные паузы sil<[ms]> через playSilentUtterance()
- *   - автоматически приглушает музыку (duck/restore) и отдаёт телеметрию isSpeaking для аватара.
+ *   - гарантированно приглушает музыку (duck/restore) на Main-потоке для ExoPlayer.
  */
 class LocalTtsManager(
     context: Context,
     private val onSpeechStart: () -> Unit,
     private val onSpeechDone: () -> Unit,
 ) : TextToSpeech.OnInitListener {
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var tts: TextToSpeech? = runCatching {
         TextToSpeech(context.applicationContext, this)
@@ -34,6 +38,9 @@ class LocalTtsManager(
 
     @Volatile
     private var lastUtteranceId: String? = null
+
+    @Volatile
+    private var duckActiveForSpeech: Boolean = false
 
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
@@ -51,31 +58,51 @@ class LocalTtsManager(
         )
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
-                if (!_isSpeaking.value) {
-                    _isSpeaking.value = true
-                    onSpeechStart()
-                }
+                notifySpeechStarted()
             }
 
             override fun onDone(utteranceId: String?) {
                 if (utteranceId == lastUtteranceId) {
-                    _isSpeaking.value = false
-                    onSpeechDone()
+                    notifySpeechFinished()
+                }
+            }
+
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                if (utteranceId == lastUtteranceId) {
+                    notifySpeechFinished()
                 }
             }
 
             @Deprecated("Deprecated in Android API")
             override fun onError(utteranceId: String?) {
-                _isSpeaking.value = false
-                onSpeechDone()
+                notifySpeechFinished()
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
-                _isSpeaking.value = false
-                onSpeechDone()
+                notifySpeechFinished()
             }
         })
         isReady = true
+    }
+
+    private fun notifySpeechStarted() {
+        mainHandler.post {
+            _isSpeaking.value = true
+            if (!duckActiveForSpeech) {
+                duckActiveForSpeech = true
+                onSpeechStart()
+            }
+        }
+    }
+
+    private fun notifySpeechFinished() {
+        mainHandler.post {
+            _isSpeaking.value = false
+            if (duckActiveForSpeech) {
+                duckActiveForSpeech = false
+                onSpeechDone()
+            }
+        }
     }
 
     fun speak(reply: MaksReply) {
@@ -83,6 +110,9 @@ class LocalTtsManager(
         if (!isReady) return
         val chunks = reply.speechChunks
         if (chunks.isEmpty()) return
+
+        // Начинаем приглушать музыку сразу на Main-потоке за 100 мс до первого звука речи
+        notifySpeechStarted()
 
         engine.setSpeechRate(reply.speechRate)
         engine.setPitch(reply.speechPitch)
@@ -109,10 +139,7 @@ class LocalTtsManager(
 
     fun stop() {
         tts?.stop()
-        if (_isSpeaking.value) {
-            _isSpeaking.value = false
-            onSpeechDone()
-        }
+        notifySpeechFinished()
     }
 
     fun shutdown() {

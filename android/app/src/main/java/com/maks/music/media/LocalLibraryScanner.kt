@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.Size
 import com.maks.music.core.AssetProvider
 import com.maks.music.core.Phonetic
 import com.maks.music.core.nlu.LocalCatalogLookup
@@ -174,7 +175,6 @@ class LocalLibraryScanner(
 
                     val duration = if (durCol >= 0) cursor.getLong(durCol) else 0L
                     val isMusic = isMusicCol < 0 || cursor.getInt(isMusicCol) != 0
-                    // Отсеиваем короткие звуки (< 15 сек), но пропускаем треки с duration=0 если это аудио-файл
                     if (duration in 1L until 15_000L) continue
                     if (!isMusic && !hasAudioExtension(displayName)) continue
 
@@ -366,7 +366,6 @@ class LocalLibraryScanner(
         }
         if (exact.isNotEmpty()) return exact.shuffled()
 
-        // Проверяем синонимы из вшитого config/aliases.json (например, «КИНО» ↔ «Виктор Цой», «Король и Шут» ↔ «КиШ»)
         val synonyms = artistSynonymGroups[qLow]
         if (!synonyms.isNullOrEmpty()) {
             val synPhons = synonyms.map { Phonetic.phon(it) }.toSet()
@@ -380,7 +379,6 @@ class LocalLibraryScanner(
             if (synMatches.isNotEmpty()) return synMatches.shuffled()
         }
 
-        // Fuzzy fallback (аналог search_local_artist_tracks в workers/music/local.py)
         return tracks.filter { t ->
             t.id !in blacklistedTrackIds && t.artist.isNotBlank() &&
                 maxOf(
@@ -407,7 +405,6 @@ class LocalLibraryScanner(
         }
         if (matches.isNotEmpty()) return matches.shuffled()
 
-        // Если теги жанров в MP3 не заполнены — фильтруем по русскоязычности для rusrock/rusestrada
         if (clean.startsWith("rus") || clean == "shanson") {
             return tracks.filter { it.id !in blacklistedTrackIds && it.isRussian }.shuffled()
         }
@@ -457,10 +454,15 @@ class LocalLibraryScanner(
         return scored
     }
 
-    /** Извлечь встроенную обложку из локального MP3/FLAC/M4A. */
+    /**
+     * Извлечь обложку трека:
+     *   1. Встроенная картинка из ID3-тегов (MediaMetadataRetriever)
+     *   2. Системная миниатюра трека / альбома из MediaStore (Android 10+)
+     *   3. Системный кэш обложек альбомов по albumId
+     */
     fun loadCoverArt(track: LocalTrack): Bitmap? {
         val retriever = MediaMetadataRetriever()
-        return try {
+        val embedded = try {
             retriever.setDataSource(context, track.contentUri)
             val bytes = retriever.embeddedPicture
             if (bytes != null) BitmapFactory.decodeByteArray(bytes, 0, bytes.size) else null
@@ -469,6 +471,33 @@ class LocalLibraryScanner(
         } finally {
             runCatching { retriever.release() }
         }
+        if (embedded != null) return embedded
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val thumb = runCatching {
+                context.contentResolver.loadThumbnail(
+                    track.contentUri,
+                    Size(512, 512),
+                    null,
+                )
+            }.getOrNull()
+            if (thumb != null) return thumb
+        }
+
+        if (track.albumId > 0L) {
+            val albumArtUri = ContentUris.withAppendedId(
+                Uri.parse("content://media/external/audio/albumart"),
+                track.albumId,
+            )
+            val streamBitmap = runCatching {
+                context.contentResolver.openInputStream(albumArtUri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            }.getOrNull()
+            if (streamBitmap != null) return streamBitmap
+        }
+
+        return null
     }
 
     private fun cleanFileName(name: String): String =

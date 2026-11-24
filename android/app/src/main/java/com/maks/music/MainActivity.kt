@@ -66,10 +66,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val micPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
+    private val voicePermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
             if (pendingPushToTalk) {
                 pendingPushToTalk = false
                 viewModel.triggerPushToTalk()
@@ -162,6 +162,11 @@ class MainActivity : ComponentActivity() {
         if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
             needed += Manifest.permission.RECORD_AUDIO
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        ) {
+            needed += Manifest.permission.BLUETOOTH_CONNECT
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             !hasPermission(Manifest.permission.POST_NOTIFICATIONS)
         ) {
@@ -208,20 +213,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun missingVoicePermissions(): List<String> {
+        val missing = mutableListOf<String>()
+        if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            missing += Manifest.permission.RECORD_AUDIO
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        ) {
+            missing += Manifest.permission.BLUETOOTH_CONNECT
+        }
+        return missing
+    }
+
     private fun triggerPushToTalkWithPermission() {
-        if (hasPermission(Manifest.permission.RECORD_AUDIO)) {
+        val missing = missingVoicePermissions()
+        if (hasPermission(Manifest.permission.RECORD_AUDIO) && missing.isEmpty()) {
             viewModel.triggerPushToTalk()
-        } else {
+        } else if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
             pendingPushToTalk = true
-            runCatching { micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+            runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
+        } else {
+            // Микрофон уже разрешён, дозапрашиваем только BLUETOOTH_CONNECT, но сразу запускаем PTT
+            runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
+            viewModel.triggerPushToTalk()
         }
     }
 
     private fun toggleVoiceService(enable: Boolean) {
-        if (enable && !hasPermission(Manifest.permission.RECORD_AUDIO)) {
-            pendingStartVoiceService = true
-            runCatching { micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
-            return
+        if (enable) {
+            val missing = missingVoicePermissions()
+            if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+                pendingStartVoiceService = true
+                runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
+                return
+            } else if (missing.isNotEmpty()) {
+                runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
+            }
         }
         val intent = Intent(this, VoiceForegroundService::class.java).apply {
             action = if (enable) VoiceForegroundService.ACTION_START else VoiceForegroundService.ACTION_STOP

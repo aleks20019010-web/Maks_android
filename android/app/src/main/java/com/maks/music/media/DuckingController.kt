@@ -6,9 +6,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Порт плавного приглушения (ducking) из workers/music/player.py:
- *   - duck(): быстрый fade за 100 мс до 28% (чтобы голос Макса/микрофон не перебивались музыкой)
- *   - restore(): плавный fade обратно за 1000 мс после окончания речи.
+ * Плавное приглушение (ducking) музыки при речи TTS и прослушке команды:
+ *   - duck(): быстрый fade за 100 мс до 10% громкости
+ *   - restore(): плавный fade обратно за 900 мс после окончания речи.
  */
 class DuckingController(
     private val scope: CoroutineScope,
@@ -22,26 +22,32 @@ class DuckingController(
     private var currentVolume: Float = 1.0f
 
     @Volatile
-    private var isDucked: Boolean = false
+    private var activeDuckCount: Int = 0
 
     private var fadeJob: Job? = null
 
     fun setUserVolume(level: Float) {
         userVolume = level.coerceIn(0f, 1f)
-        if (!isDucked) {
+        if (activeDuckCount <= 0) {
             fadeTo(userVolume, durationMs = 80L)
         }
     }
 
     fun duck(duckFactor: Float = DUCK_LEVEL) {
-        isDucked = true
+        activeDuckCount++
         val target = (userVolume * duckFactor.coerceIn(0f, 1f)).coerceIn(0f, 1f)
         fadeTo(target, durationMs = FADE_DUCK_MS)
     }
 
     fun restore() {
-        if (!isDucked) return
-        isDucked = false
+        if (activeDuckCount <= 0) return
+        activeDuckCount--
+        if (activeDuckCount > 0) return
+        fadeTo(userVolume, durationMs = FADE_RESTORE_MS)
+    }
+
+    fun forceRestore() {
+        activeDuckCount = 0
         fadeTo(userVolume, durationMs = FADE_RESTORE_MS)
     }
 
@@ -63,9 +69,9 @@ class DuckingController(
     }
 
     companion object {
-        private const val DUCK_LEVEL = 0.25f
+        private const val DUCK_LEVEL = 0.10f
         private const val FADE_DUCK_MS = 100L
-        private const val FADE_RESTORE_MS = 1000L
+        private const val FADE_RESTORE_MS = 900L
         private const val STEP_MS = 25L
     }
 }

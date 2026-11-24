@@ -9,10 +9,6 @@ import com.maks.music.core.personality.MaksReply
 import com.maks.music.core.personality.PersonalityEngine
 import com.maks.music.media.LocalMusicController
 
-/**
- * Порт brain/router.py, сфокусированный на музыкальном ядре:
- *   YES/NO (pending от appraisal 3x skip) → NLU Pipeline → LocalMusicController → PersonalityEngine.
- */
 class MusicRouter(
     private val pipeline: NluPipeline,
     private val volumeParser: VolumeParser,
@@ -80,12 +76,12 @@ class MusicRouter(
             "play_wave" -> {
                 val lang = entity?.language ?: entity?.value?.takeIf { it == "russian" || it == "not-russian" }
                 if (music.playWave(lang)) {
-                    val fallback = when (lang) {
-                        "russian" -> "Включаю русскую волну"
-                        "not-russian" -> "Включаю зарубежную волну"
-                        else -> "Включаю вашу локальную волну"
+                    val phraseSet = when (lang) {
+                        "russian" -> "PLAY_WAVE_RUSSIAN"
+                        "not-russian" -> "PLAY_WAVE_FOREIGN"
+                        else -> "PLAY_WAVE"
                     }
-                    personality.respond("PLAY_WAVE", fallbackText = fallback)
+                    personality.respond(phraseSet)
                 } else if (lang == "russian") {
                     personality.respond(
                         "PLAY_SEARCH_NOT_FOUND",

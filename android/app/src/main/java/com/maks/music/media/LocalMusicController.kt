@@ -1,8 +1,10 @@
 package com.maks.music.media
 
+import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.AudioManager
+import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 enum class RepeatMode {
     OFF,
@@ -54,10 +57,6 @@ data class PlayerUiState(
     val sleepTimerMinutesLeft: Int? = null,
 )
 
-/**
- * Центральный музыкальный контроллер Макса (100% локально:
- * MediaStore + ExoPlayer + SmartWaveEngine + MusicMemoryDb + AppraisalPolicy).
- */
 class LocalMusicController(
     private val context: Context,
     val scanner: LocalLibraryScanner,
@@ -82,8 +81,8 @@ class LocalMusicController(
     private val _uiState = MutableStateFlow(PlayerUiState(volumePercent = getSystemVolumePercent()))
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
-    /** Колбэк в MusicRouter, когда сработало правило 3 скипов подряд (APPRAISAL_SKIP_3X). */
     var onAppraisalTriggered: ((AppraisalPolicy.AppraisalDecision) -> Unit)? = null
+    var onLikeStateChanged: ((Boolean) -> Unit)? = null
 
     private var queue: List<LocalTrack> = emptyList()
     private var originalQueue: List<LocalTrack> = emptyList()
@@ -130,14 +129,16 @@ class LocalMusicController(
             list to likedIds
         }
         val cur = currentTrack()
+        val likedNow = cur?.id in liked
         _uiState.update {
             it.copy(
                 libraryCount = scanned.size,
                 allTracks = scanned,
                 likedTrackIds = liked,
-                isCurrentLiked = cur?.id in liked,
+                isCurrentLiked = likedNow,
             )
         }
+        onLikeStateChanged?.invoke(likedNow)
         return scanned.size
     }
 
@@ -314,7 +315,6 @@ class LocalMusicController(
             return currentTrack()
         }
 
-        // Конец очереди → дозаправляем локальную волну
         val nextWave = waveEngine.buildWaveQueue(scanner.allTracks(), currentLanguageFilter)
         if (nextWave.isEmpty()) return null
         startQueue(nextWave, _uiState.value.modeLabel)
@@ -375,6 +375,7 @@ class LocalMusicController(
                 likedTrackIds = it.likedTrackIds + track.id,
             )
         }
+        onLikeStateChanged?.invoke(true)
         return track
     }
 
@@ -387,12 +388,16 @@ class LocalMusicController(
             if (nowLiked) memoryDb.addLike(track.id, track.artist, track.title)
             else memoryDb.removeLike(track.artist, track.title)
         }
+        val isCurrent = _uiState.value.currentTrack?.id == track.id
         _uiState.update { state ->
             val updatedSet = if (nowLiked) state.likedTrackIds + track.id else state.likedTrackIds - track.id
             state.copy(
                 likedTrackIds = updatedSet,
-                isCurrentLiked = if (state.currentTrack?.id == track.id) nowLiked else state.isCurrentLiked,
+                isCurrentLiked = if (isCurrent) nowLiked else state.isCurrentLiked,
             )
+        }
+        if (isCurrent) {
+            onLikeStateChanged?.invoke(nowLiked)
         }
         return nowLiked
     }
@@ -414,6 +419,7 @@ class LocalMusicController(
                 likedTrackIds = it.likedTrackIds - track.id,
             )
         }
+        onLikeStateChanged?.invoke(false)
         next(isUserSkip = false)
         return track
     }
@@ -500,54 +506,95 @@ class LocalMusicController(
         playCurrentIndex()
     }
 
+    private fun buildMediaItem(track: LocalTrack, artworkBytes: ByteArray?): MediaItem {
+        val metadataBuilder = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.artist)
+            .setAlbumTitle(track.album)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+
+        if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+            metadataBuilder.setArtworkData(artworkBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        } else if (track.albumId > 0L) {
+            val albumArtUri = ContentUris.withAppendedId(
+                Uri.parse("content://media/external/audio/albumart"),
+                track.albumId,
+            )
+            metadataBuilder.setArtworkUri(albumArtUri)
+        }
+
+        return MediaItem.Builder()
+            .setMediaId(track.id)
+            .setUri(track.contentUri)
+            .setMediaMetadata(metadataBuilder.build())
+            .build()
+    }
+
+    private fun bitmapToJpegBytes(bitmap: Bitmap): ByteArray? = runCatching {
+        // Масштабируем до 512x512 для быстрой передачи в системный MediaSession без OutOfMemory
+        val maxSide = 512
+        val scaled = if (bitmap.width > maxSide || bitmap.height > maxSide) {
+            val ratio = minOf(maxSide.toFloat() / bitmap.width, maxSide.toFloat() / bitmap.height)
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * ratio).toInt().coerceAtLeast(1),
+                (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else {
+            bitmap
+        }
+        ByteArrayOutputStream().use { out ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
+    }.getOrNull()
+
     private fun playCurrentIndex() {
         val track = currentTrack() ?: return
         val p = player
         if (p == null) {
             pendingPlayWhenBound = true
+            val initialLiked = track.id in _uiState.value.likedTrackIds
             _uiState.update {
                 it.copy(
                     currentTrack = track,
+                    coverArt = null,
                     durationMs = track.durationMs,
                     positionMs = 0L,
-                    isCurrentLiked = track.id in it.likedTrackIds,
+                    isCurrentLiked = initialLiked,
                 )
             }
+            onLikeStateChanged?.invoke(initialLiked)
             return
         }
 
         waveEngine.markPlayed(track.id)
 
-        val item = MediaItem.Builder()
-            .setMediaId(track.id)
-            .setUri(track.contentUri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(track.title)
-                    .setArtist(track.artist)
-                    .setAlbumTitle(track.album)
-                    .build()
-            )
-            .build()
-
-        p.setMediaItem(item)
+        val initialItem = buildMediaItem(track, artworkBytes = null)
+        p.setMediaItem(initialItem)
         p.prepare()
         p.play()
 
-        // Сразу показываем метаданные трека, пока обложка грузится в IO
+        val initialLiked = track.id in _uiState.value.likedTrackIds
         _uiState.update {
             it.copy(
                 currentTrack = track,
+                coverArt = null,
                 durationMs = track.durationMs,
                 positionMs = 0L,
-                isCurrentLiked = track.id in it.likedTrackIds,
+                isCurrentLiked = initialLiked,
             )
         }
+        onLikeStateChanged?.invoke(initialLiked)
 
         scope.launch(Dispatchers.IO) {
             runCatching { memoryDb.recordPlay(track.id, track.artist, track.title) }
             val liked = runCatching { memoryDb.isLiked(track.artist, track.title) }.getOrDefault(false)
             val cover = scanner.loadCoverArt(track)
+            val artBytes = cover?.let { bitmapToJpegBytes(it) }
+
             withContext(Dispatchers.Main) {
                 if (currentTrack()?.id == track.id) {
                     _uiState.update {
@@ -555,6 +602,13 @@ class LocalMusicController(
                             coverArt = cover,
                             isCurrentLiked = liked,
                         )
+                    }
+                    onLikeStateChanged?.invoke(liked)
+
+                    // Обновляем MediaMetadata в активном ExoPlayer, чтобы шторка и экран блокировки получили обложку
+                    if (artBytes != null && p.mediaItemCount > 0) {
+                        val updatedItem = buildMediaItem(track, artworkBytes = artBytes)
+                        p.replaceMediaItem(0, updatedItem)
                     }
                 }
             }
