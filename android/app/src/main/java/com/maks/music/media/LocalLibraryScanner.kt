@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.LruCache
 import android.util.Size
 import com.maks.music.core.AssetProvider
 import com.maks.music.core.Phonetic
@@ -18,18 +19,18 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Сканер локальной музыки:
- *   1. Android MediaStore.Audio.Media (находит всю музыку в памяти и на SD-карте, включая Download)
- *   2. Выбранные пользователем папки через Storage Access Framework (SAF / OpenDocumentTree)
- *   3. Авто-разбор имён файлов вида «Артист - Название.mp3», если ID3-теги не заполнены.
- */
 class LocalLibraryScanner(
     private val context: Context,
     assets: AssetProvider,
 ) : LocalCatalogLookup {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // Кэш миниатюр обложек (до ~16 МБ) для плавной отрисовки в списках Медиатеки и Очереди
+    private val thumbnailCache = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+    private val missingThumbIds = java.util.Collections.synchronizedSet(HashSet<String>())
 
     @Volatile
     private var tracks: List<LocalTrack> = emptyList()
@@ -47,11 +48,6 @@ class LocalLibraryScanner(
         }.mapKeys { it.key.lowercase() }
     }.getOrDefault(emptyMap())
 
-    /**
-     * Группы синонимов артистов из config/aliases.json:
-     * ключ (canonical lower или alias lower) → множество всех известных вариантов имени артиста.
-     * Позволяет находить MP3 с тегом «Виктор Цой» при запросе «КИНО» и «КиШ» при запросе «Король и Шут».
-     */
     private val artistSynonymGroups: Map<String, Set<String>> = runCatching {
         val raw = assets.readText("config/aliases.json") ?: return@runCatching emptyMap()
         val obj = Json.parseToJsonElement(raw).jsonObject
@@ -92,8 +88,8 @@ class LocalLibraryScanner(
         prefs.edit().putStringSet(KEY_FOLDERS, current).apply()
     }
 
-    /** Полное пересканирование аудиофайлов на устройстве (вызывать в Dispatchers.IO). */
     fun scan(): List<LocalTrack> {
+        missingThumbIds.clear()
         val result = mutableListOf<LocalTrack>()
         val seenKeys = HashSet<String>()
 
@@ -426,13 +422,12 @@ class LocalLibraryScanner(
         }.shuffled()
     }
 
-    /** Универсальный локальный поиск: точный → фонетика → fuzzy по artist + title. */
     fun searchLocal(query: String, blacklistedTrackIds: Set<String>): List<LocalTrack> {
         val qLow = Phonetic.cleanKey(query)
         if (qLow.isEmpty()) return emptyList()
         val qPhon = Phonetic.phon(qLow)
 
-        val scored = tracks.asSequence()
+        return tracks.asSequence()
             .filter { it.id !in blacklistedTrackIds }
             .mapNotNull { t ->
                 val combined = Phonetic.cleanKey("${t.artist} ${t.title}")
@@ -450,16 +445,9 @@ class LocalLibraryScanner(
             .sortedByDescending { it.second }
             .map { it.first }
             .toList()
-
-        return scored
     }
 
-    /**
-     * Извлечь обложку трека:
-     *   1. Встроенная картинка из ID3-тегов (MediaMetadataRetriever)
-     *   2. Системная миниатюра трека / альбома из MediaStore (Android 10+)
-     *   3. Системный кэш обложек альбомов по albumId
-     */
+    /** Полноразмерная обложка для главного плеера и экрана блокировки. */
     fun loadCoverArt(track: LocalTrack): Bitmap? {
         val retriever = MediaMetadataRetriever()
         val embedded = try {
@@ -498,6 +486,36 @@ class LocalLibraryScanner(
         }
 
         return null
+    }
+
+    /** Компактная кэшированная миниатюра (128×128) для списков Медиатеки и Очереди. */
+    fun loadCachedThumbnail(track: LocalTrack): Bitmap? {
+        thumbnailCache.get(track.id)?.let { return it }
+        if (track.id in missingThumbIds) return null
+
+        val full = loadCoverArt(track)
+        if (full == null) {
+            missingThumbIds.add(track.id)
+            return null
+        }
+
+        val thumb = runCatching {
+            val maxSide = 128
+            if (full.width > maxSide || full.height > maxSide) {
+                val ratio = minOf(maxSide.toFloat() / full.width, maxSide.toFloat() / full.height)
+                Bitmap.createScaledBitmap(
+                    full,
+                    (full.width * ratio).toInt().coerceAtLeast(1),
+                    (full.height * ratio).toInt().coerceAtLeast(1),
+                    true,
+                ).also { if (it !== full) full.recycle() }
+            } else {
+                full
+            }
+        }.getOrDefault(full)
+
+        thumbnailCache.put(track.id, thumb)
+        return thumb
     }
 
     private fun cleanFileName(name: String): String =

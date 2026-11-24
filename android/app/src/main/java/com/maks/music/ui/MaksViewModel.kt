@@ -1,6 +1,7 @@
 package com.maks.music.ui
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,8 +10,10 @@ import com.maks.music.MaksBanner
 import com.maks.music.media.LocalTrack
 import com.maks.music.media.PlayerUiState
 import com.maks.music.voice.VoiceEngineState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MaksViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as MaksApplication
@@ -31,6 +34,10 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     fun addMusicFolder(treeUri: Uri) {
         app.libraryScanner.addMusicFolder(treeUri)
         refreshLibrary()
+    }
+
+    suspend fun loadTrackThumbnail(track: LocalTrack): Bitmap? = withContext(Dispatchers.IO) {
+        app.libraryScanner.loadCachedThumbnail(track)
     }
 
     fun submitCommand(text: String) = app.submitTextCommand(text)
