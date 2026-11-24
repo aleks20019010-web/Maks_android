@@ -5,16 +5,35 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.maks.music.core.TimeBucket
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Локальная долговременная память Макса на Android SQLite (совместимая с memory/storage.py):
  *   - events (история воспроизведений, скипов, дослушиваний)
  *   - artist_stats (веса артистов для умной Волны и правило PLAY_ARTIST_3X / 5X)
  *   - track_stats (счётчики и blacklist треков)
- *   - liked_tracks (локальный плейлист лайков)
+ *   - liked_tracks (локальный плейлист лайков + seed-once из assets/config/liked_tracks.json)
  *   - habits (привычки time_bucket → artist)
  */
 class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
+
+    data class ImportResult(
+        val likedAdded: Int,
+        val dislikedTracksAdded: Int,
+        val dislikedArtistsAdded: Int,
+    )
+
+    private val appContext = context.applicationContext
+    private val prettyJson = Json { prettyPrint = true }
 
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
@@ -96,6 +115,200 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         onCreate(db)
+    }
+
+    /**
+     * Однократная загрузка стартовых лайков из assets/config/liked_tracks.json.
+     * После первого запуска флаг сохраняется в SharedPreferences — удалённые пользователем
+     * треки больше не восстанавливаются.
+     */
+    fun seedInitialLikesIfNeeded(): Int {
+        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_INITIAL_LIKES_SEEDED, false)) return 0
+
+        val raw = runCatching {
+            appContext.assets.open(INITIAL_LIKES_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.getOrNull() ?: return 0
+
+        val result = runCatching { importPreferencesJson(raw) }.getOrNull()
+        prefs.edit().putBoolean(KEY_INITIAL_LIKES_SEEDED, true).apply()
+        return result?.likedAdded ?: 0
+    }
+
+    fun exportPreferencesJson(): String {
+        val db = readableDatabase
+
+        val likedArray = buildJsonArray {
+            db.rawQuery(
+                "SELECT artist, title, track_id, added_at FROM liked_tracks ORDER BY added_at DESC",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    add(
+                        buildJsonObject {
+                            put("artist", c.getString(0).orEmpty())
+                            put("title", c.getString(1).orEmpty())
+                            put("track_id", c.getString(2).orEmpty())
+                            put("ts", c.getLong(3) / 1000.0)
+                            put("source", "android")
+                        }
+                    )
+                }
+            }
+        }
+
+        val dislikedTracksArray = buildJsonArray {
+            db.rawQuery(
+                "SELECT artist, title, track_id, last_played FROM track_stats WHERE blacklisted = 1 ORDER BY last_played DESC",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    add(
+                        buildJsonObject {
+                            put("artist", c.getString(0).orEmpty())
+                            put("title", c.getString(1).orEmpty())
+                            put("track_id", c.getString(2).orEmpty())
+                            put("ts", c.getLong(3) / 1000.0)
+                        }
+                    )
+                }
+            }
+        }
+
+        val dislikedArtistsArray = buildJsonArray {
+            db.rawQuery(
+                "SELECT COALESCE(NULLIF(display_name, ''), artist) FROM artist_stats WHERE blacklisted = 1",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(0).orEmpty()
+                    if (name.isNotBlank()) add(kotlinx.serialization.json.JsonPrimitive(name))
+                }
+            }
+        }
+
+        val root = buildJsonObject {
+            put("version", 1)
+            put("exported_at", System.currentTimeMillis())
+            put("liked", likedArray)
+            put("disliked_tracks", dislikedTracksArray)
+            put("disliked_artists", dislikedArtistsArray)
+        }
+        return prettyJson.encodeToString(JsonObject.serializer(), root)
+    }
+
+    /**
+     * Поддерживает оба формата:
+     *   1. Полный бэкап: { "liked": [...], "disliked_tracks": [...], "disliked_artists": [...] }
+     *   2. Прямой массив лайков (совместим с десктопным liked_tracks.json): [ { "artist", "title", ... } ]
+     */
+    fun importPreferencesJson(rawJson: String): ImportResult {
+        val root = Json.parseToJsonElement(rawJson)
+        var likedAdded = 0
+        var dislikedTracksAdded = 0
+        var dislikedArtistsAdded = 0
+
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            when (root) {
+                is JsonArray -> {
+                    likedAdded += importLikedArray(db, root)
+                }
+                is JsonObject -> {
+                    root["liked"]?.jsonArray?.let { arr ->
+                        likedAdded += importLikedArray(db, arr)
+                    }
+                    root["disliked_tracks"]?.jsonArray?.let { arr ->
+                        for (el in arr) {
+                            val obj = runCatching { el.jsonObject }.getOrNull() ?: continue
+                            val artist = obj["artist"]?.jsonPrimitive?.content?.trim().orEmpty()
+                            val title = obj["title"]?.jsonPrimitive?.content?.trim().orEmpty()
+                            val rawId = obj["track_id"]?.jsonPrimitive?.content?.trim().orEmpty()
+                            val trackId = rawId.ifBlank { trackKey(artist, title) }
+                            if (artist.isBlank() && title.isBlank()) continue
+
+                            db.delete("liked_tracks", "track_key = ?", arrayOf(trackKey(artist, title)))
+                            db.execSQL(
+                                """
+                                INSERT INTO track_stats (track_id, artist, title, blacklisted, last_played)
+                                VALUES (?, ?, ?, 1, ?)
+                                ON CONFLICT(track_id) DO UPDATE SET blacklisted = 1
+                                """.trimIndent(),
+                                arrayOf(trackId, artist, title, System.currentTimeMillis())
+                            )
+                            dislikedTracksAdded++
+                        }
+                    }
+                    root["disliked_artists"]?.jsonArray?.let { arr ->
+                        for (el in arr) {
+                            val name = runCatching { el.jsonPrimitive.content.trim() }.getOrNull().orEmpty()
+                            if (name.isBlank()) continue
+                            val artistKey = name.lowercase()
+                            db.execSQL(
+                                """
+                                INSERT INTO artist_stats (artist, display_name, weight, blacklisted)
+                                VALUES (?, ?, -5.0, 1)
+                                ON CONFLICT(artist) DO UPDATE SET blacklisted = 1, weight = -5.0
+                                """.trimIndent(),
+                                arrayOf(artistKey, name)
+                            )
+                            dislikedArtistsAdded++
+                        }
+                    }
+                }
+                else -> Unit
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+
+        return ImportResult(likedAdded, dislikedTracksAdded, dislikedArtistsAdded)
+    }
+
+    private fun importLikedArray(db: SQLiteDatabase, array: JsonArray): Int {
+        var added = 0
+        val now = System.currentTimeMillis()
+        for (el in array) {
+            val obj = runCatching { el.jsonObject }.getOrNull() ?: continue
+            val artist = obj["artist"]?.jsonPrimitive?.content?.trim().orEmpty()
+            val title = obj["title"]?.jsonPrimitive?.content?.trim().orEmpty()
+            if (artist.isBlank() && title.isBlank()) continue
+
+            val trackId = obj["track_id"]?.jsonPrimitive?.content?.trim().orEmpty()
+            val tsSec = obj["ts"]?.jsonPrimitive?.doubleOrNull
+            val addedAt = if (tsSec != null && tsSec > 0.0) (tsSec * 1000.0).toLong() else now
+            val key = trackKey(artist, title)
+
+            val rowId = db.insertWithOnConflict(
+                "liked_tracks",
+                null,
+                ContentValues().apply {
+                    put("track_key", key)
+                    put("track_id", trackId)
+                    put("artist", artist)
+                    put("title", title)
+                    put("added_at", addedAt)
+                },
+                SQLiteDatabase.CONFLICT_IGNORE
+            )
+            if (rowId != -1L) {
+                added++
+                val artistKey = artist.lowercase()
+                if (artistKey.isNotEmpty()) {
+                    db.execSQL(
+                        """
+                        INSERT INTO artist_stats (artist, display_name, weight)
+                        VALUES (?, ?, 1.5)
+                        ON CONFLICT(artist) DO UPDATE SET weight = MIN(10.0, weight + 0.5), blacklisted = 0
+                        """.trimIndent(),
+                        arrayOf(artistKey, artist)
+                    )
+                }
+            }
+        }
+        return added
     }
 
     fun recordPlay(trackId: String, artist: String, title: String) {
@@ -228,7 +441,6 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
             },
             SQLiteDatabase.CONFLICT_IGNORE
         )
-        // Снимаем blacklist, если трек понравился
         db.execSQL("UPDATE track_stats SET blacklisted = 0 WHERE track_id = ?", arrayOf(trackId))
         val artistKey = artist.trim().lowercase()
         if (artistKey.isNotEmpty()) {
@@ -261,6 +473,17 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
             while (c.moveToNext()) {
                 val id = c.getString(0)
                 if (!id.isNullOrBlank()) out += id
+            }
+        }
+        return out
+    }
+
+    fun getLikedTrackKeys(): Set<String> {
+        val out = LinkedHashSet<String>()
+        readableDatabase.rawQuery("SELECT track_key FROM liked_tracks ORDER BY added_at DESC", null).use { c ->
+            while (c.moveToNext()) {
+                val key = c.getString(0)
+                if (!key.isNullOrBlank()) out += key
             }
         }
         return out
@@ -335,11 +558,14 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
         }
     }
 
-    private fun trackKey(artist: String, title: String): String =
-        "${artist.trim().lowercase()}::${title.trim().lowercase()}"
-
     companion object {
         private const val DB_NAME = "memory.db"
         private const val DB_VERSION = 1
+        private const val PREFS_NAME = "maks_memory_prefs"
+        private const val KEY_INITIAL_LIKES_SEEDED = "seeded_initial_likes_v1"
+        private const val INITIAL_LIKES_ASSET = "config/liked_tracks.json"
+
+        fun trackKey(artist: String, title: String): String =
+            "${artist.trim().lowercase()}::${title.trim().lowercase()}"
     }
 }

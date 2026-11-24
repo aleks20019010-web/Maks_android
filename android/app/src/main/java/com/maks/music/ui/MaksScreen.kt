@@ -214,6 +214,9 @@ fun MaksScreen(
                         onToggleBassBoost = { viewModel.setBassBoostEnabled(it) },
                         onBalanceChange = { viewModel.setStereoBalance(it) },
                         onSelectSleepTimer = { viewModel.setSleepTimer(it) },
+                        onSelectCrossfade = viewModel::setCrossfadeSec,
+                        onExportPreferencesUri = viewModel::exportPreferencesToUri,
+                        onImportPreferencesUri = viewModel::importPreferencesFromUri,
                     )
 
                     MainTab.LIBRARY -> LibraryTab(

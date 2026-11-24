@@ -53,6 +53,7 @@ data class PlayerUiState(
     val eqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
     val bassBoostEnabled: Boolean = false,
     val stereoBalance: Float = 0f,
+    val crossfadeSec: Float = 2.0f,
     val volumePercent: Int = 70,
     val sleepTimerMinutesLeft: Int? = null,
 )
@@ -71,6 +72,9 @@ class LocalMusicController(
 
     @Volatile
     private var pendingPlayWhenBound: Boolean = false
+
+    @Volatile
+    private var crossfadeOutTriggeredForTrackId: String? = null
 
     val equalizer = EqualizerController()
     val waveEngine = SmartWaveEngine(memoryDb)
@@ -111,7 +115,7 @@ class LocalMusicController(
         startProgressTicker()
         if (pendingPlayWhenBound && currentTrack() != null) {
             pendingPlayWhenBound = false
-            playCurrentIndex()
+            playCurrentIndex(useFadeIn = false)
         }
     }
 
@@ -123,23 +127,49 @@ class LocalMusicController(
     }
 
     suspend fun refreshLibrary(): Int {
-        val (scanned, liked) = withContext(Dispatchers.IO) {
+        val (scanned, matchedLikedIds) = withContext(Dispatchers.IO) {
+            runCatching { memoryDb.seedInitialLikesIfNeeded() }
             val list = scanner.scan()
             val likedIds = runCatching { memoryDb.getLikedTrackIds() }.getOrDefault(emptySet())
-            list to likedIds
+            val likedKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
+            val matched = list
+                .filter { track ->
+                    track.id in likedIds ||
+                        MusicMemoryDb.trackKey(track.artist, track.title) in likedKeys
+                }
+                .map { it.id }
+                .toSet()
+            list to matched
         }
         val cur = currentTrack()
-        val likedNow = cur?.id in liked
+        val likedNow = cur?.id in matchedLikedIds
         _uiState.update {
             it.copy(
                 libraryCount = scanned.size,
                 allTracks = scanned,
-                likedTrackIds = liked,
+                likedTrackIds = matchedLikedIds,
                 isCurrentLiked = likedNow,
             )
         }
         onLikeStateChanged?.invoke(likedNow)
         return scanned.size
+    }
+
+    suspend fun exportPreferencesJson(): String = withContext(Dispatchers.IO) {
+        memoryDb.exportPreferencesJson()
+    }
+
+    suspend fun importPreferencesJson(rawJson: String): MusicMemoryDb.ImportResult {
+        val result = withContext(Dispatchers.IO) {
+            memoryDb.importPreferencesJson(rawJson)
+        }
+        refreshLibrary()
+        return result
+    }
+
+    fun setCrossfadeSec(seconds: Float) {
+        val clamped = seconds.coerceIn(0f, 3.0f)
+        _uiState.update { it.copy(crossfadeSec = clamped) }
     }
 
     fun playWave(languageFilter: String? = null): Boolean {
@@ -186,9 +216,14 @@ class LocalMusicController(
 
     fun playLocalLiked(): Boolean {
         val likedIds = memoryDb.getLikedTrackIds()
-        if (likedIds.isEmpty()) return false
-        val byId = scanner.allTracks().associateBy { it.id }
-        val list = likedIds.mapNotNull { byId[it] }.shuffled()
+        val likedKeys = memoryDb.getLikedTrackKeys()
+        if (likedIds.isEmpty() && likedKeys.isEmpty()) return false
+        val list = scanner.allTracks()
+            .filter { track ->
+                track.id in likedIds ||
+                    MusicMemoryDb.trackKey(track.artist, track.title) in likedKeys
+            }
+            .shuffled()
         if (list.isEmpty()) return false
         startQueue(list, "Мои лайки")
         return true
@@ -214,14 +249,14 @@ class LocalMusicController(
                 currentIndex = currentIndex,
             )
         }
-        playCurrentIndex()
+        playCurrentIndex(useFadeIn = false)
     }
 
     fun playQueueIndex(index: Int) {
         if (index !in queue.indices) return
         currentIndex = index
         _uiState.update { it.copy(currentIndex = currentIndex) }
-        playCurrentIndex()
+        playCurrentIndex(useFadeIn = false)
     }
 
     fun toggleShuffle() {
@@ -292,32 +327,34 @@ class LocalMusicController(
             }
         }
 
+        val shouldFadeIn = !isUserSkip && _uiState.value.crossfadeSec > 0f
+
         if (queue.isEmpty()) {
             return if (playWave(currentLanguageFilter)) currentTrack() else null
         }
 
         if (!isUserSkip && _uiState.value.repeatMode == RepeatMode.ONE) {
-            playCurrentIndex()
+            playCurrentIndex(useFadeIn = shouldFadeIn)
             return currentTrack()
         }
 
         if (currentIndex + 1 < queue.size) {
             currentIndex++
             _uiState.update { it.copy(currentIndex = currentIndex) }
-            playCurrentIndex()
+            playCurrentIndex(useFadeIn = shouldFadeIn)
             return currentTrack()
         }
 
         if (_uiState.value.repeatMode == RepeatMode.ALL) {
             currentIndex = 0
             _uiState.update { it.copy(currentIndex = currentIndex) }
-            playCurrentIndex()
+            playCurrentIndex(useFadeIn = shouldFadeIn)
             return currentTrack()
         }
 
         val nextWave = waveEngine.buildWaveQueue(scanner.allTracks(), currentLanguageFilter)
         if (nextWave.isEmpty()) return null
-        startQueue(nextWave, _uiState.value.modeLabel)
+        startQueue(nextWave, _uiState.value.modeLabel, useFadeIn = shouldFadeIn)
         return currentTrack()
     }
 
@@ -330,7 +367,7 @@ class LocalMusicController(
         if (queue.isEmpty()) return null
         currentIndex = if (currentIndex > 0) currentIndex - 1 else queue.lastIndex
         _uiState.update { it.copy(currentIndex = currentIndex) }
-        playCurrentIndex()
+        playCurrentIndex(useFadeIn = false)
         return currentTrack()
     }
 
@@ -343,6 +380,7 @@ class LocalMusicController(
         if (currentTrack() == null) {
             playWave()
         } else if (p != null) {
+            ducking.setCrossfadeImmediate(1.0f)
             p.play()
         } else {
             pendingPlayWhenBound = true
@@ -355,10 +393,13 @@ class LocalMusicController(
 
     fun stop() {
         player?.stop()
+        ducking.setCrossfadeImmediate(1.0f)
         _uiState.update { it.copy(isPlaying = false, positionMs = 0L) }
     }
 
     fun seekTo(positionMs: Long) {
+        crossfadeOutTriggeredForTrackId = null
+        ducking.setCrossfadeImmediate(1.0f)
         player?.seekTo(positionMs)
         _uiState.update { it.copy(positionMs = positionMs) }
     }
@@ -492,7 +533,7 @@ class LocalMusicController(
 
     fun currentTrack(): LocalTrack? = queue.getOrNull(currentIndex)
 
-    private fun startQueue(newQueue: List<LocalTrack>, modeLabel: String) {
+    private fun startQueue(newQueue: List<LocalTrack>, modeLabel: String, useFadeIn: Boolean = false) {
         originalQueue = newQueue
         queue = if (_uiState.value.isShuffle) newQueue.shuffled() else newQueue
         currentIndex = 0
@@ -503,7 +544,7 @@ class LocalMusicController(
                 currentIndex = currentIndex,
             )
         }
-        playCurrentIndex()
+        playCurrentIndex(useFadeIn = useFadeIn)
     }
 
     private fun buildMediaItem(track: LocalTrack, artworkBytes: ByteArray?): MediaItem {
@@ -532,7 +573,6 @@ class LocalMusicController(
     }
 
     private fun bitmapToJpegBytes(bitmap: Bitmap): ByteArray? = runCatching {
-        // Масштабируем до 512x512 для быстрой передачи в системный MediaSession без OutOfMemory
         val maxSide = 512
         val scaled = if (bitmap.width > maxSide || bitmap.height > maxSide) {
             val ratio = minOf(maxSide.toFloat() / bitmap.width, maxSide.toFloat() / bitmap.height)
@@ -551,8 +591,10 @@ class LocalMusicController(
         }
     }.getOrNull()
 
-    private fun playCurrentIndex() {
+    private fun playCurrentIndex(useFadeIn: Boolean = false) {
         val track = currentTrack() ?: return
+        crossfadeOutTriggeredForTrackId = null
+
         val p = player
         if (p == null) {
             pendingPlayWhenBound = true
@@ -572,10 +614,21 @@ class LocalMusicController(
 
         waveEngine.markPlayed(track.id)
 
+        val crossfadeMs = (_uiState.value.crossfadeSec * 1000f).toLong()
+        if (useFadeIn && crossfadeMs > 0L) {
+            ducking.setCrossfadeImmediate(0.02f)
+        } else {
+            ducking.setCrossfadeImmediate(1.0f)
+        }
+
         val initialItem = buildMediaItem(track, artworkBytes = null)
         p.setMediaItem(initialItem)
         p.prepare()
         p.play()
+
+        if (useFadeIn && crossfadeMs > 0L) {
+            ducking.fadeCrossfade(1.0f, crossfadeMs)
+        }
 
         val initialLiked = track.id in _uiState.value.likedTrackIds
         _uiState.update {
@@ -605,7 +658,6 @@ class LocalMusicController(
                     }
                     onLikeStateChanged?.invoke(liked)
 
-                    // Обновляем MediaMetadata в активном ExoPlayer, чтобы шторка и экран блокировки получили обложку
                     if (artBytes != null && p.mediaItemCount > 0) {
                         val updatedItem = buildMediaItem(track, artworkBytes = artBytes)
                         p.replaceMediaItem(0, updatedItem)
@@ -634,14 +686,26 @@ class LocalMusicController(
             while (isActive) {
                 val p = player
                 if (p != null && p.isPlaying) {
+                    val pos = p.currentPosition.coerceAtLeast(0L)
+                    val dur = p.duration.takeIf { d -> d > 0 } ?: _uiState.value.durationMs
                     _uiState.update {
                         it.copy(
-                            positionMs = p.currentPosition.coerceAtLeast(0L),
-                            durationMs = p.duration.takeIf { d -> d > 0 } ?: it.durationMs,
+                            positionMs = pos,
+                            durationMs = dur,
                         )
                     }
+
+                    val crossfadeMs = (_uiState.value.crossfadeSec * 1000f).toLong()
+                    val curTrack = currentTrack()
+                    if (crossfadeMs > 0L && curTrack != null && dur > crossfadeMs * 2L + 4_000L) {
+                        val remaining = dur - pos
+                        if (remaining in 300L..crossfadeMs && crossfadeOutTriggeredForTrackId != curTrack.id) {
+                            crossfadeOutTriggeredForTrackId = curTrack.id
+                            ducking.fadeCrossfade(0.02f, remaining)
+                        }
+                    }
                 }
-                delay(250L)
+                delay(150L)
             }
         }
     }

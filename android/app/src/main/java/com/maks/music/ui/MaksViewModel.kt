@@ -3,6 +3,7 @@ package com.maks.music.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maks.music.MaksApplication
@@ -58,8 +59,43 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     fun setEqBandDb(bandIndex: Int, db: Float) = app.musicController.setEqBandDb(bandIndex, db)
     fun setBassBoostEnabled(enabled: Boolean) = app.musicController.setBassBoostEnabled(enabled)
     fun setStereoBalance(balance: Float) = app.musicController.setStereoBalance(balance)
+    fun setCrossfadeSec(seconds: Float) = app.musicController.setCrossfadeSec(seconds)
     fun setVolumePercent(pct: Int) = app.musicController.setSystemVolumePercent(pct)
     fun setSleepTimer(minutes: Int?) = app.musicController.setSleepTimer(minutes)
+
+    fun exportPreferencesToUri(uri: Uri) {
+        viewModelScope.launch {
+            val ok = runCatching {
+                val json = app.musicController.exportPreferencesJson()
+                withContext(Dispatchers.IO) {
+                    app.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(json.toByteArray(Charsets.UTF_8))
+                    } ?: error("Не удалось открыть файл для записи")
+                }
+            }.isSuccess
+            val msg = if (ok) "Лайки и дизлайки сохранены в JSON" else "Ошибка экспорта JSON"
+            Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun importPreferencesFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = runCatching {
+                val raw = withContext(Dispatchers.IO) {
+                    app.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                        ?: error("Не удалось прочитать файл")
+                }
+                app.musicController.importPreferencesJson(raw)
+            }.getOrNull()
+
+            val msg = if (result != null) {
+                "Импорт: +${result.likedAdded} лайков, +${result.dislikedTracksAdded} дизлайков"
+            } else {
+                "Ошибка чтения JSON"
+            }
+            Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun playWave(lang: String? = null) = app.musicController.playWave(lang)
     fun playLiked() = app.musicController.playLocalLiked()

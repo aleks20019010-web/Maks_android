@@ -1,5 +1,8 @@
 package com.maks.music.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -16,7 +19,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,8 +31,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,9 +76,24 @@ fun EqStudioTab(
     onToggleBassBoost: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
     onSelectSleepTimer: (Int?) -> Unit,
+    onSelectCrossfade: (Float) -> Unit = {},
+    onExportPreferencesUri: (Uri) -> Unit = {},
+    onImportPreferencesUri: (Uri) -> Unit = {},
 ) {
     val eqEnabled = player.eqEnabled
     val bands = player.eqBandsDb
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) onExportPreferencesUri(uri)
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) onImportPreferencesUri(uri)
+    }
 
     Column(
         modifier = Modifier
@@ -197,7 +217,7 @@ fun EqStudioTab(
             }
         }
 
-        // 4. Карточка Bass Boost (как на макете)
+        // 4. Карточка Bass Boost
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -260,7 +280,7 @@ fun EqStudioTab(
             )
         }
 
-        // 5. Баланс L / R + Таймер сна
+        // 5. Баланс L / R
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -303,7 +323,57 @@ fun EqStudioTab(
             )
         }
 
-        // 6. Таймер сна
+        // 6. Кроссфейд между треками (1.5–3 сек)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaksColors.CyanAccent,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Плавный переход (Кроссфейд)",
+                    color = MaksColors.TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(0f to "Выкл", 1.5f to "1.5 с", 2.0f to "2.0 с", 3.0f to "3.0 с").forEach { (sec, label) ->
+                    val active = abs(player.crossfadeSec - sec) < 0.05f
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (active) MaksColors.VioletAccent.copy(alpha = 0.22f) else MaksColors.SpaceSurface)
+                            .border(
+                                1.dp,
+                                if (active) MaksColors.LavenderGlow else MaksColors.SpaceBorder,
+                                RoundedCornerShape(12.dp),
+                            )
+                            .clickable { onSelectCrossfade(sec) }
+                            .padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (active) MaksColors.TextPrimary else MaksColors.TextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+
+        // 7. Таймер сна
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -349,6 +419,75 @@ fun EqStudioTab(
                             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     }
+                }
+            }
+        }
+
+        // 8. Экспорт / Импорт лайков и дизлайков (JSON)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaksColors.SpaceSurface)
+                .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(20.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "База лайков и дизлайков (JSON)",
+                color = MaksColors.TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Совместимо с liked_tracks.json десктопного Макса",
+                color = MaksColors.TextMuted,
+                fontSize = 12.sp,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaksColors.SpaceSurfaceElevated)
+                        .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(12.dp))
+                        .clickable { exportLauncher.launch("maks_preferences.json") }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Upload,
+                        contentDescription = null,
+                        tint = MaksColors.CyanAccent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Экспорт", color = MaksColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaksColors.SpaceSurfaceElevated)
+                        .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(12.dp))
+                        .clickable { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Download,
+                        contentDescription = null,
+                        tint = MaksColors.LavenderGlow,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Импорт", color = MaksColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -415,7 +554,6 @@ private fun VerticalEqFader(
             val trackLen = (trackBottom - trackTop).coerceAtLeast(1f)
             val trackW = 5.dp.toPx()
 
-            // Деления шкалы по бокам
             val tickCount = 9
             for (t in 0..tickCount) {
                 val ty = trackTop + (t.toFloat() / tickCount) * trackLen
@@ -438,7 +576,6 @@ private fun VerticalEqFader(
                 )
             }
 
-            // Тёмный углублённый паз трека
             drawRoundRect(
                 color = Color(0xFF0A0C16),
                 topLeft = Offset(cx - trackW * 0.5f, trackTop),
@@ -446,11 +583,9 @@ private fun VerticalEqFader(
                 cornerRadius = CornerRadius(trackW * 0.5f, trackW * 0.5f),
             )
 
-            // Позиция ползунка (1 = +12 dB сверху, 0 = -12 dB снизу)
             val norm = ((valueDb.coerceIn(-12f, 12f) + 12f) / 24f).coerceIn(0f, 1f)
             val thumbY = trackBottom - norm * trackLen
 
-            // Светящаяся фиолетово-голубая полоса снизу до ползунка
             val fillH = (trackBottom - thumbY).coerceAtLeast(2f)
             drawRoundRect(
                 brush = Brush.verticalGradient(
@@ -463,7 +598,6 @@ private fun VerticalEqFader(
                 cornerRadius = CornerRadius(trackW * 0.5f, trackW * 0.5f),
             )
 
-            // Мягкое свечение под капсулой ползунка
             val glowR = 20.dp.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
@@ -479,7 +613,6 @@ private fun VerticalEqFader(
                 center = Offset(cx, thumbY),
             )
 
-            // Тактильная стеклянная капсула-ползунок
             val knobW = 28.dp.toPx()
             val knobH = 14.dp.toPx()
             drawRoundRect(
@@ -488,7 +621,6 @@ private fun VerticalEqFader(
                 size = Size(knobW, knobH),
                 cornerRadius = CornerRadius(knobH * 0.5f, knobH * 0.5f),
             )
-            // Светящаяся неоновая риска в центре капсулы
             val innerW = 14.dp.toPx()
             val innerH = 3.dp.toPx()
             drawRoundRect(
@@ -568,7 +700,6 @@ private fun StereoBalanceSlider(
             val span = (right - left).coerceAtLeast(1f)
             val midX = left + span * 0.5f
 
-            // Штрихи шкалы баланса
             val ticks = 10
             for (i in 0..ticks) {
                 val tx = left + (i.toFloat() / ticks) * span
@@ -583,7 +714,6 @@ private fun StereoBalanceSlider(
                 )
             }
 
-            // Тонкая базовая линия
             drawLine(
                 color = Color(0x28FFFFFF),
                 start = Offset(left, cy),
@@ -594,7 +724,6 @@ private fun StereoBalanceSlider(
 
             val thumbX = left + ((balance.coerceIn(-1f, 1f) + 1f) * 0.5f) * span
 
-            // Светящийся отрезок от центра к ползунку
             drawLine(
                 brush = Brush.horizontalGradient(listOf(MaksColors.VioletAccent, accent)),
                 start = Offset(midX, cy),
@@ -603,7 +732,6 @@ private fun StereoBalanceSlider(
                 cap = StrokeCap.Round,
             )
 
-            // Свечение ползунка
             val glowR = 14.dp.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
