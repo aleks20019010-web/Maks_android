@@ -19,16 +19,25 @@ import com.maks.music.MaksApplication
 class VoiceForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            (application as MaksApplication).voiceEngine.stop()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        val app = application as MaksApplication
+        when (intent?.action) {
+            ACTION_STOP -> {
+                app.voiceEngine.stop()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_SHUTDOWN_ALL -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                app.shutdownApp()
+                return START_NOT_STICKY
+            }
         }
 
         ensureNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
-        (application as MaksApplication).voiceEngine.startAlwaysListening()
+        app.voiceEngine.startAlwaysListening()
         return START_STICKY
     }
 
@@ -60,11 +69,26 @@ class VoiceForegroundService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+
+        val shutdownIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, VoiceForegroundService::class.java).apply {
+                action = ACTION_SHUTDOWN_ALL
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Макс слушает (оффлайн)")
-            .setContentText("Скажите «Макс...» или «дальше / пауза / тише»")
+            .setContentText("Скажите «Макс...» или нажмите «Выключить»")
             .setContentIntent(openIntent)
+            .addAction(
+                android.R.drawable.ic_lock_power_off,
+                "Выключить",
+                shutdownIntent
+            )
             .setOngoing(true)
             .build()
     }
@@ -72,6 +96,7 @@ class VoiceForegroundService : Service() {
     companion object {
         const val ACTION_START = "com.maks.music.VOICE_START"
         const val ACTION_STOP = "com.maks.music.VOICE_STOP"
+        const val ACTION_SHUTDOWN_ALL = "com.maks.music.SHUTDOWN_ALL"
         private const val CHANNEL_ID = "maks_voice_channel"
         private const val NOTIFICATION_ID = 4201
     }

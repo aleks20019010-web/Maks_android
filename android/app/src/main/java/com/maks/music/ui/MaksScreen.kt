@@ -1,6 +1,8 @@
 package com.maks.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -52,6 +55,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Repeat
@@ -94,6 +98,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.maks.music.MaksBanner
@@ -103,6 +108,7 @@ import com.maks.music.media.RepeatMode
 import com.maks.music.voice.VoiceEngineState
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private enum class MainTab(val label: String, val icon: ImageVector) {
@@ -131,6 +137,7 @@ fun MaksScreen(
     onPickMusicFolder: () -> Unit,
     onPushToTalk: () -> Unit,
     onToggleAlwaysListening: (Boolean) -> Unit,
+    onShutdownApp: () -> Unit,
 ) {
     val player by viewModel.playerState.collectAsState()
     val banner by viewModel.banner.collectAsState()
@@ -181,7 +188,6 @@ fun MaksScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {
-            // Основная область вкладки
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -202,6 +208,7 @@ fun MaksScreen(
                                 onRequestAudioPermission = onRequestAudioPermission,
                                 onPickMusicFolder = onPickMusicFolder,
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
+                                onShutdownApp = onShutdownApp,
                                 onOpenEq = { activeTab = MainTab.EQ },
                                 onSwitchToCore = { playerViewMode = PlayerViewMode.MAKS_CORE },
                                 onPushToTalk = onPushToTalk,
@@ -214,6 +221,7 @@ fun MaksScreen(
                                 onToggleShuffle = { viewModel.toggleShuffle() },
                                 onCycleRepeat = { viewModel.cycleRepeatMode() },
                                 onStartWave = { viewModel.playWave() },
+                                onPlayLiked = { viewModel.playLiked() },
                             )
                         } else {
                             MaksCoreTab(
@@ -227,6 +235,7 @@ fun MaksScreen(
                                 onSwitchToPlayer = { playerViewMode = PlayerViewMode.PLAYER },
                                 onPushToTalk = onPushToTalk,
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
+                                onShutdownApp = onShutdownApp,
                                 onSubmitCommand = { cmd -> viewModel.submitCommand(cmd) },
                             )
                         }
@@ -282,7 +291,6 @@ fun MaksScreen(
                     )
                 }
 
-                // Всплывающее сообщение Макса (вынесено вне ColumnScope)
                 MaksBannerOverlay(
                     banner = banner,
                     accent = accent,
@@ -301,7 +309,6 @@ fun MaksScreen(
                 )
             }
 
-            // Компактный мини-плеер, когда открыто Ядро Макса, Медиатека, EQ Studio или Очередь
             val showMiniPlayer = (activeTab != MainTab.PLAYER || playerViewMode == PlayerViewMode.MAKS_CORE) &&
                 player.currentTrack != null
             if (showMiniPlayer) {
@@ -317,7 +324,6 @@ fun MaksScreen(
                 )
             }
 
-            // Нижняя панель навигации (4 вкладки)
             BottomNavBar(
                 activeTab = activeTab,
                 onSelect = { tab ->
@@ -371,6 +377,7 @@ private fun NowPlayingTab(
     onRequestAudioPermission: () -> Unit,
     onPickMusicFolder: () -> Unit,
     onToggleAlwaysListening: () -> Unit,
+    onShutdownApp: () -> Unit,
     onOpenEq: () -> Unit,
     onSwitchToCore: () -> Unit,
     onPushToTalk: () -> Unit,
@@ -383,6 +390,7 @@ private fun NowPlayingTab(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onStartWave: () -> Unit,
+    onPlayLiked: () -> Unit,
 ) {
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
@@ -402,7 +410,7 @@ private fun NowPlayingTab(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // 1. Верхняя панель: переключатель «Плеер ↔ Ядро Макса» + EQ и микрофон
+        // 1. Верхняя панель: переключатель «Плеер ↔ Ядро Макса» + EQ, микрофон и кнопка выключения
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -418,7 +426,7 @@ private fun NowPlayingTab(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                IconButton(onClick = onOpenEq) {
+                IconButton(onClick = onOpenEq, modifier = Modifier.size(38.dp)) {
                     Icon(
                         imageVector = Icons.Rounded.GraphicEq,
                         contentDescription = "EQ Studio",
@@ -427,19 +435,29 @@ private fun NowPlayingTab(
                         } else {
                             MaksColors.TextSecondary
                         },
+                        modifier = Modifier.size(21.dp),
                     )
                 }
-                IconButton(onClick = onToggleAlwaysListening) {
+                IconButton(onClick = onToggleAlwaysListening, modifier = Modifier.size(38.dp)) {
                     Icon(
                         imageVector = if (alwaysListening) Icons.Rounded.Mic else Icons.Rounded.MicOff,
                         contentDescription = "Голосовой режим",
                         tint = if (alwaysListening) MaksColors.CyanAccent else MaksColors.TextMuted,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
+                IconButton(onClick = onShutdownApp, modifier = Modifier.size(38.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.PowerSettingsNew,
+                        contentDescription = "Выключить Макса",
+                        tint = MaksColors.LikeRose,
+                        modifier = Modifier.size(21.dp),
                     )
                 }
             }
         }
 
-        // 2. Центральный круговой циферблат с обложкой / плазменным ядром + неоновая дуга прогресса
+        // 2. Центральный круговой циферблат с обложкой / ядром и свайпом влево/вправо для смены трека
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -455,6 +473,8 @@ private fun NowPlayingTab(
                 avatarMode = avatarMode,
                 avatarAudioLevel = avatarAudioLevel,
                 onTapOrb = onPushToTalk,
+                onSwipeNext = onNext,
+                onSwipePrev = onPrev,
                 modifier = Modifier
                     .widthIn(max = 266.dp)
                     .fillMaxWidth(0.80f)
@@ -463,7 +483,6 @@ private fun NowPlayingTab(
 
             Spacer(Modifier.height(6.dp))
 
-            // Табличное время под кольцом (как 2:36 / 4:48 на макете)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -535,7 +554,6 @@ private fun NowPlayingTab(
             }
         }
 
-        // Компактная плашка выдачи доступа / выбора папки, если нет треков
         if (!hasAudioPermission || player.libraryCount == 0) {
             Row(
                 modifier = Modifier
@@ -665,7 +683,7 @@ private fun NowPlayingTab(
             )
         }
 
-        // 6. Нижняя сдвоенная стеклянная панель быстрых действий (как [ Add to Playlist | Lyrics ] на макете)
+        // 6. Нижняя сдвоенная стеклянная панель: «Моя волна» | «Избранное» (запуск лайков)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -712,20 +730,20 @@ private fun NowPlayingTab(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .clickable { onSwitchToCore() }
+                    .clickable { onPlayLiked() }
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.Mic,
+                    imageVector = Icons.Rounded.Favorite,
                     contentDescription = null,
-                    tint = if (voiceState == VoiceEngineState.LISTENING_COMMAND) MaksColors.LikeRose else accent,
+                    tint = MaksColors.LikeRose,
                     modifier = Modifier.size(17.dp),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Ядро Макса",
+                    text = "Избранное",
                     color = MaksColors.TextPrimary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
@@ -746,13 +764,40 @@ private fun CircularArtworkDial(
     avatarMode: AvatarMode,
     avatarAudioLevel: Float,
     onTapOrb: () -> Unit,
+    onSwipeNext: () -> Unit,
+    onSwipePrev: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val latestNext by rememberUpdatedState(onSwipeNext)
+    val latestPrev by rememberUpdatedState(onSwipePrev)
+    var rawDragX by remember { mutableFloatStateOf(0f) }
+    val animatedOffsetX by animateFloatAsState(
+        targetValue = rawDragX.coerceIn(-120f, 120f),
+        animationSpec = tween(durationMillis = if (rawDragX == 0f) 220 else 0),
+        label = "artwork_swipe_offset",
+    )
+
     Box(
-        modifier = modifier,
+        modifier = modifier.pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { rawDragX = 0f },
+                onHorizontalDrag = { change, dragAmount ->
+                    change.consume()
+                    rawDragX += dragAmount
+                },
+                onDragEnd = {
+                    val thresholdPx = 56.dp.toPx()
+                    when {
+                        rawDragX <= -thresholdPx -> latestNext()
+                        rawDragX >= thresholdPx -> latestPrev()
+                    }
+                    rawDragX = 0f
+                },
+                onDragCancel = { rawDragX = 0f },
+            )
+        },
         contentAlignment = Alignment.Center,
     ) {
-        // Внешние прецизионные штрихи, неоновое кольцо прогресса и светящаяся точка-индикатор
         Canvas(modifier = Modifier.fillMaxSize()) {
             val minDim = size.minDimension
             if (minDim <= 8f) return@Canvas
@@ -765,7 +810,6 @@ private fun CircularArtworkDial(
             val innerTickR = minDim * 0.462f
             val ringR = minDim * 0.422f
 
-            // Мягкое фиолетово-голубое свечение за кольцом
             drawCircle(
                 brush = Brush.radialGradient(
                     0.55f to MaksColors.VioletAccent.copy(alpha = 0.14f),
@@ -778,7 +822,6 @@ private fun CircularArtworkDial(
                 center = center,
             )
 
-            // 60 микро-делений циферблата по окружности
             val ticks = 60
             for (i in 0 until ticks) {
                 val deg = -90f + (i.toFloat() / ticks) * 360f
@@ -794,7 +837,6 @@ private fun CircularArtworkDial(
                 )
             }
 
-            // Тёмный трек прогресса
             drawCircle(
                 color = Color(0xFF1A1E32),
                 radius = ringR,
@@ -802,7 +844,6 @@ private fun CircularArtworkDial(
                 style = Stroke(width = 3.dp.toPx()),
             )
 
-            // Светящаяся дуга прогресса (Violet -> Lavender -> Cyan)
             val sweep = (progress.coerceIn(0f, 1f) * 360f).coerceAtLeast(if (progress > 0f) 4f else 0f)
             if (sweep > 0.5f) {
                 val arcTopLeft = Offset(cx - ringR, cy - ringR)
@@ -812,7 +853,6 @@ private fun CircularArtworkDial(
                     start = Offset(cx - ringR, cy - ringR),
                     end = Offset(cx + ringR, cy + ringR),
                 )
-                // Мягкий bloom под дугой
                 drawArc(
                     brush = arcBrush,
                     startAngle = -90f,
@@ -823,7 +863,6 @@ private fun CircularArtworkDial(
                     alpha = 0.34f,
                     style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
                 )
-                // Чёткая яркая дуга
                 drawArc(
                     brush = arcBrush,
                     startAngle = -90f,
@@ -834,7 +873,6 @@ private fun CircularArtworkDial(
                     style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round),
                 )
 
-                // Светящаяся орбитальная точка на кончике дуги
                 val tipRad = (-90f + sweep) * (PI.toFloat() / 180f)
                 val tipPos = Offset(cx + cos(tipRad) * ringR, cy + sin(tipRad) * ringR)
                 drawCircle(
@@ -854,9 +892,10 @@ private fun CircularArtworkDial(
             }
         }
 
-        // Внутренняя круглая обложка или плазменная сфера Макса
+        // Внутренняя круглая обложка / сфера со сдвигом при свайпе
         Box(
             modifier = Modifier
+                .offset { IntOffset((animatedOffsetX * 0.45f).roundToInt(), 0) }
                 .fillMaxSize(0.75f)
                 .clip(CircleShape)
                 .background(
@@ -885,7 +924,6 @@ private fun CircularArtworkDial(
             }
         }
 
-        // Когда есть обложка — аккуратная компактная сфера Макса в нижнем правом углу кольца
         if (coverArt != null && !coverArt.isRecycled) {
             Box(
                 modifier = Modifier
@@ -955,7 +993,6 @@ private fun SlimNeonSeekBar(
         val span = (endX - startX).coerceAtLeast(1f)
         val thumbX = startX + fraction.coerceIn(0f, 1f) * span
 
-        // Неактивный трек
         drawLine(
             color = Color(0xFF1F2338),
             start = Offset(startX, cy),
@@ -964,7 +1001,6 @@ private fun SlimNeonSeekBar(
             cap = StrokeCap.Round,
         )
 
-        // Активный неоновый отрезок
         if (thumbX > startX) {
             drawLine(
                 brush = Brush.horizontalGradient(
@@ -979,7 +1015,6 @@ private fun SlimNeonSeekBar(
             )
         }
 
-        // Светящийся бегунок
         val glowR = 11.dp.toPx()
         drawCircle(
             brush = Brush.radialGradient(
@@ -1152,7 +1187,6 @@ private fun LibraryTab(
             }
         }
 
-        // Поиск
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
@@ -1178,7 +1212,6 @@ private fun LibraryTab(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        // Фильтры + быстрый старт Волны
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1856,6 +1889,7 @@ private fun MaksCoreTab(
     onSwitchToPlayer: () -> Unit,
     onPushToTalk: () -> Unit,
     onToggleAlwaysListening: () -> Unit,
+    onShutdownApp: () -> Unit,
     onSubmitCommand: (String) -> Unit,
 ) {
     var commandText by remember { mutableStateOf("") }
@@ -1867,7 +1901,6 @@ private fun MaksCoreTab(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // 1. Верхняя панель с переключателем Плеер ↔ Ядро Макса
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1879,16 +1912,29 @@ private fun MaksCoreTab(
                 onSelectCore = {},
             )
 
-            IconButton(onClick = onToggleAlwaysListening) {
-                Icon(
-                    imageVector = if (alwaysListening) Icons.Rounded.Mic else Icons.Rounded.MicOff,
-                    contentDescription = "Голосовой режим",
-                    tint = if (alwaysListening) MaksColors.CyanAccent else MaksColors.TextMuted,
-                )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                IconButton(onClick = onToggleAlwaysListening, modifier = Modifier.size(38.dp)) {
+                    Icon(
+                        imageVector = if (alwaysListening) Icons.Rounded.Mic else Icons.Rounded.MicOff,
+                        contentDescription = "Голосовой режим",
+                        tint = if (alwaysListening) MaksColors.CyanAccent else MaksColors.TextMuted,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
+                IconButton(onClick = onShutdownApp, modifier = Modifier.size(38.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.PowerSettingsNew,
+                        contentDescription = "Выключить Макса",
+                        tint = MaksColors.LikeRose,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
             }
         }
 
-        // 2. Полноразмерное 3D-ядро Макса в центре экрана
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1960,7 +2006,6 @@ private fun MaksCoreTab(
             )
         }
 
-        // 3. Быстрые голосовые сценарии, ввод команды и фоновая активация
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),

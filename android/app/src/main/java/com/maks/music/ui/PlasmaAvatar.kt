@@ -22,7 +22,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.sin
 
 enum class AvatarMode {
@@ -36,15 +38,6 @@ private data class AvatarPalette(
     val core: Color,
 )
 
-/**
- * Проработанное объёмное плазменное 3D-ядро Макса (Jetpack Compose Canvas):
- *   - многослойная сфера с мягким атмосферным свечением (без прямоугольной обрезки)
- *   - вращающиеся прецизионные орбитальные дуги и светящиеся узлы
- *   - 8 высокодетализированных 3D-лент с двухпроходным bloom-свечением и глубиной по оси Z
- *   - аудио-реактивное гармоническое кольцо-корона
- *   - 18 орбитальных микрочастиц с перспективным масштабированием
- *   - объёмное белое энергоядро и стеклянный блик.
- */
 @Composable
 fun PlasmaAvatar(
     mode: AvatarMode,
@@ -55,17 +48,18 @@ fun PlasmaAvatar(
     var smoothAudio by remember { mutableFloatStateOf(0f) }
 
     val targetSpeed = when (mode) {
-        AvatarMode.SLEEP -> 0.30f
+        AvatarMode.SLEEP -> 0.28f
         AvatarMode.IDLE -> 0.72f
-        AvatarMode.LISTENING -> 1.30f
-        AvatarMode.CURIOUS -> 1.45f
-        AvatarMode.SPEAKING -> 1.55f
-        AvatarMode.MUSIC -> 1.25f
-        AvatarMode.HAPPY -> 1.18f
-        AvatarMode.ERROR -> 0.85f
+        AvatarMode.LISTENING -> 1.38f
+        AvatarMode.CURIOUS -> 1.48f
+        AvatarMode.SPEAKING -> 1.65f
+        AvatarMode.MUSIC -> 1.32f
+        AvatarMode.HAPPY -> 1.22f
+        AvatarMode.ERROR -> 0.90f
     }
 
     val latestAudio by rememberUpdatedState(audioLevel.coerceIn(0f, 1f))
+    val currentMode by rememberUpdatedState(mode)
 
     LaunchedEffect(targetSpeed) {
         var lastNs = 0L
@@ -74,7 +68,18 @@ fun PlasmaAvatar(
                 if (lastNs != 0L) {
                     val dt = ((frameNs - lastNs) / 1_000_000_000f).coerceAtMost(0.05f)
                     phase += dt * targetSpeed
-                    smoothAudio += (latestAudio - smoothAudio) * (dt * 10f).coerceAtMost(1f)
+
+                    // В режиме MUSIC добавляем живую ритмическую пульсацию поверх базового уровня
+                    val effectiveTarget = if (currentMode == AvatarMode.MUSIC) {
+                        val beat = (abs(sin(phase * 3.1f)).pow(3f) * 0.34f +
+                            abs(cos(phase * 1.7f)) * 0.14f)
+                        (latestAudio * 0.65f + beat).coerceIn(0.12f, 0.95f)
+                    } else {
+                        latestAudio
+                    }
+
+                    val attack = if (effectiveTarget > smoothAudio) 14f else 6f
+                    smoothAudio += (effectiveTarget - smoothAudio) * (dt * attack).coerceAtMost(1f)
                 }
                 lastNs = frameNs
             }
@@ -82,10 +87,10 @@ fun PlasmaAvatar(
     }
 
     val targetPalette = remember(mode) { paletteFor(mode) }
-    val c1 by animateColorAsState(targetPalette.primary, tween(550), label = "plasma_c1")
-    val c2 by animateColorAsState(targetPalette.secondary, tween(550), label = "plasma_c2")
-    val c3 by animateColorAsState(targetPalette.accent, tween(550), label = "plasma_c3")
-    val cCore by animateColorAsState(targetPalette.core, tween(550), label = "plasma_core")
+    val c1 by animateColorAsState(targetPalette.primary, tween(500), label = "plasma_c1")
+    val c2 by animateColorAsState(targetPalette.secondary, tween(500), label = "plasma_c2")
+    val c3 by animateColorAsState(targetPalette.accent, tween(500), label = "plasma_c3")
+    val cCore by animateColorAsState(targetPalette.core, tween(500), label = "plasma_core")
 
     Canvas(modifier = modifier) {
         val minDim = size.minDimension
@@ -96,17 +101,17 @@ fun PlasmaAvatar(
         val center = Offset(cx, cy)
 
         val energy = smoothAudio.coerceIn(0f, 1f)
-        val breathe = sin(phase * 1.9f) * 0.025f
+        val breathe = sin(phase * 1.9f) * 0.022f
         val maxSafeRadius = minDim * 0.49f
-        val sphereR = (minDim * 0.315f * (1f + energy * 0.09f + breathe)).coerceAtLeast(2f)
-        val haloR = (sphereR * 1.48f).coerceAtMost(maxSafeRadius)
+        val sphereR = (minDim * 0.31f * (1f + energy * 0.10f + breathe)).coerceAtLeast(2f)
+        val haloR = (sphereR * 1.52f).coerceAtMost(maxSafeRadius)
 
-        // 1. Мягкая космическая туманность вокруг сферы (строго вписана в холст, без обрезки)
+        // 1. Внешняя космическая туманность
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to c1.copy(alpha = 0.30f + energy * 0.16f),
-                0.48f to c2.copy(alpha = 0.16f + energy * 0.08f),
-                0.78f to c3.copy(alpha = 0.05f),
+                0.0f to c1.copy(alpha = 0.34f + energy * 0.18f),
+                0.46f to c2.copy(alpha = 0.18f + energy * 0.10f),
+                0.78f to c3.copy(alpha = 0.06f),
                 1.0f to Color.Transparent,
                 center = center,
                 radius = haloR,
@@ -115,13 +120,31 @@ fun PlasmaAvatar(
             center = center,
         )
 
-        // 2. Тёмное объёмное стеклянное тело сферы + внутреннее френелевское свечение края
+        // 2. Расширяющаяся ударная волна (Shockwave) при активности голоса или музыки
+        if (energy > 0.16f) {
+            for (w in 0..1) {
+                val waveProgress = ((phase * 0.55f + w * 0.5f) % 1f)
+                val rippleR = sphereR * (0.95f + waveProgress * 0.48f)
+                if (rippleR < maxSafeRadius) {
+                    val rippleAlpha = ((1f - waveProgress) * (energy * 0.32f)).coerceIn(0f, 0.35f)
+                    drawCircle(
+                        color = c3.copy(alpha = rippleAlpha),
+                        radius = rippleR,
+                        center = center,
+                        style = Stroke(width = (minDim * 0.006f).coerceAtLeast(1f)),
+                        blendMode = BlendMode.Screen,
+                    )
+                }
+            }
+        }
+
+        // 3. Тёмная стеклянная сфера с френелевским ободком
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to Color(0xFF0A1228).copy(alpha = 0.88f),
-                0.68f to Color(0xFF060B1B).copy(alpha = 0.82f),
-                0.88f to c1.copy(alpha = 0.24f + energy * 0.12f),
-                0.97f to c3.copy(alpha = 0.38f + energy * 0.18f),
+                0.0f to Color(0xFF0B132B).copy(alpha = 0.90f),
+                0.66f to Color(0xFF060A18).copy(alpha = 0.85f),
+                0.88f to c1.copy(alpha = 0.28f + energy * 0.14f),
+                0.97f to c3.copy(alpha = 0.44f + energy * 0.20f),
                 1.0f to Color.Transparent,
                 center = center,
                 radius = sphereR * 1.04f,
@@ -130,72 +153,91 @@ fun PlasmaAvatar(
             center = center,
         )
 
-        // 3. Прецизионное внешнее орбитальное HUD-кольцо с двумя дугами и бегущими огнями
-        val ringR = (sphereR * 1.18f).coerceAtMost(maxSafeRadius * 0.96f)
+        // 4. Внешнее орбитальное HUD-кольцо с микро-рисками и 2 светящимися узлами
+        val ringR = (sphereR * 1.20f).coerceAtMost(maxSafeRadius * 0.96f)
         val ringTopLeft = Offset(cx - ringR, cy - ringR)
         val ringSize = Size(ringR * 2f, ringR * 2f)
-        val ringDeg1 = (phase * 26f) % 360f
-        val ringDeg2 = (-phase * 19f + 135f) % 360f
+        val ringDeg1 = (phase * 28f) % 360f
+        val ringDeg2 = (-phase * 21f + 140f) % 360f
 
         drawCircle(
-            color = c1.copy(alpha = 0.14f),
+            color = c1.copy(alpha = 0.15f),
             radius = ringR,
             center = center,
             style = Stroke(width = (minDim * 0.0045f).coerceAtLeast(1f)),
         )
+
+        // 24 тонкие орбитальные насечки на внешнем кольце
+        for (t in 0 until 24) {
+            val tRad = ((t * 15f) + ringDeg1 * 0.35f) * (PI.toFloat() / 180f)
+            val isCardinal = t % 6 == 0
+            val r1 = ringR - (if (isCardinal) minDim * 0.016f else minDim * 0.008f)
+            val r2 = ringR + (if (isCardinal) minDim * 0.016f else minDim * 0.008f)
+            drawLine(
+                color = c3.copy(alpha = if (isCardinal) 0.42f else 0.18f),
+                start = Offset(cx + cos(tRad) * r1, cy + sin(tRad) * r1),
+                end = Offset(cx + cos(tRad) * r2, cy + sin(tRad) * r2),
+                strokeWidth = (if (isCardinal) 1.5f else 1f),
+                cap = StrokeCap.Round,
+                blendMode = BlendMode.Screen,
+            )
+        }
+
         drawArc(
-            color = c3.copy(alpha = 0.42f + energy * 0.25f),
+            color = c3.copy(alpha = 0.48f + energy * 0.25f),
             startAngle = ringDeg1,
-            sweepAngle = 72f,
+            sweepAngle = 78f,
             useCenter = false,
             topLeft = ringTopLeft,
             size = ringSize,
-            style = Stroke(width = (minDim * 0.009f).coerceAtLeast(1.4f), cap = StrokeCap.Round),
+            style = Stroke(width = (minDim * 0.0095f).coerceAtLeast(1.4f), cap = StrokeCap.Round),
             blendMode = BlendMode.Screen,
         )
         drawArc(
-            color = c2.copy(alpha = 0.36f + energy * 0.22f),
+            color = c2.copy(alpha = 0.40f + energy * 0.22f),
             startAngle = ringDeg2,
-            sweepAngle = 54f,
+            sweepAngle = 58f,
             useCenter = false,
             topLeft = ringTopLeft,
             size = ringSize,
-            style = Stroke(width = (minDim * 0.007f).coerceAtLeast(1.2f), cap = StrokeCap.Round),
+            style = Stroke(width = (minDim * 0.0075f).coerceAtLeast(1.2f), cap = StrokeCap.Round),
             blendMode = BlendMode.Screen,
         )
 
-        // Светящиеся узлы на концах орбитальной дуги
-        val nodeRad = (ringDeg1 + 72f) * (PI.toFloat() / 180f)
-        val nodePos = Offset(cx + cos(nodeRad) * ringR, cy + sin(nodeRad) * ringR)
-        val nodeGlowR = (minDim * 0.032f).coerceAtLeast(3f)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(cCore.copy(alpha = 0.95f), c3.copy(alpha = 0.45f), Color.Transparent),
-                center = nodePos,
+        // Два светящихся узла на концах дуг
+        listOf(ringDeg1 + 78f to c3, ringDeg2 + 58f to c2).forEach { (deg, nodeColor) ->
+            val nodeRad = deg * (PI.toFloat() / 180f)
+            val nodePos = Offset(cx + cos(nodeRad) * ringR, cy + sin(nodeRad) * ringR)
+            val nodeGlowR = (minDim * 0.032f).coerceAtLeast(3f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(cCore.copy(alpha = 0.95f), nodeColor.copy(alpha = 0.50f), Color.Transparent),
+                    center = nodePos,
+                    radius = nodeGlowR,
+                ),
                 radius = nodeGlowR,
-            ),
-            radius = nodeGlowR,
-            center = nodePos,
-            blendMode = BlendMode.Screen,
-        )
+                center = nodePos,
+                blendMode = BlendMode.Screen,
+            )
+        }
 
-        // 4. Аудио-реактивное гармоническое кольцо-корона вокруг экватора сферы
+        // 5. Аудио-реактивная плазменная корона вокруг экватора
         val coronaPath = Path()
-        val coronaSteps = 72
+        val coronaSteps = 80
         for (s in 0..coronaSteps) {
             val a = (s.toFloat() / coronaSteps) * (2f * PI.toFloat())
-            val wave1 = sin(a * 5f + phase * 3.4f) * (0.025f + energy * 0.075f)
-            val wave2 = cos(a * 3f - phase * 2.2f) * (0.018f + energy * 0.045f)
-            val rr = (sphereR * (0.96f + wave1 + wave2)).coerceAtMost(maxSafeRadius * 0.94f)
+            val wave1 = sin(a * 6f + phase * 3.6f) * (0.022f + energy * 0.085f)
+            val wave2 = cos(a * 3f - phase * 2.4f) * (0.016f + energy * 0.050f)
+            val rr = (sphereR * (0.95f + wave1 + wave2)).coerceAtMost(maxSafeRadius * 0.94f)
             val px = cx + cos(a) * rr
             val py = cy + sin(a) * rr
             if (s == 0) coronaPath.moveTo(px, py) else coronaPath.lineTo(px, py)
         }
         drawPath(
             path = coronaPath,
-            color = c3.copy(alpha = 0.14f + energy * 0.22f),
+            color = c3.copy(alpha = 0.16f + energy * 0.24f),
             style = Stroke(
-                width = (minDim * 0.020f).coerceAtLeast(2.4f),
+                width = (minDim * 0.022f).coerceAtLeast(2.4f),
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
             ),
@@ -203,26 +245,26 @@ fun PlasmaAvatar(
         )
         drawPath(
             path = coronaPath,
-            color = cCore.copy(alpha = 0.26f + energy * 0.34f),
+            color = cCore.copy(alpha = 0.30f + energy * 0.36f),
             style = Stroke(
-                width = (minDim * 0.006f).coerceAtLeast(1f),
+                width = (minDim * 0.0065f).coerceAtLeast(1f),
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
             ),
             blendMode = BlendMode.Screen,
         )
 
-        // 5. 8 высокодетализированных 3D плазменных шелковых лент (72 шага + двухпроходный bloom)
-        val ribbonCount = 8
-        val steps = 72
-        val bloomStrokeW = (minDim * 0.024f + energy * minDim * 0.012f).coerceAtLeast(3f)
-        val coreStrokeW = (minDim * 0.0085f + energy * minDim * 0.0045f).coerceAtLeast(1.3f)
+        // 6. 10 трёхмерных шелковых плазменных лент с глубиной по оси Z
+        val ribbonCount = 10
+        val steps = 76
+        val bloomStrokeW = (minDim * 0.023f + energy * minDim * 0.012f).coerceAtLeast(2.8f)
+        val coreStrokeW = (minDim * 0.008f + energy * minDim * 0.0045f).coerceAtLeast(1.2f)
 
         for (i in 0 until ribbonCount) {
-            val tiltX = (i.toFloat() / ribbonCount) * PI.toFloat() + sin(phase * 0.45f + i) * 0.18f
-            val tiltZ = (i * 0.62f) + phase * (0.28f + (i % 3) * 0.11f)
-            val spin = phase * (0.85f + (i % 4) * 0.22f) + i * 1.13f
-            val ribbonScale = 0.72f + (i % 3) * 0.11f
+            val tiltX = (i.toFloat() / ribbonCount) * PI.toFloat() + sin(phase * 0.45f + i) * 0.20f
+            val tiltZ = (i * 0.58f) + phase * (0.26f + (i % 3) * 0.10f)
+            val spin = phase * (0.82f + (i % 4) * 0.21f) + i * 1.07f
+            val ribbonScale = 0.68f + (i % 4) * 0.085f
 
             val path = Path()
             val cosTiltX = cos(tiltX)
@@ -236,23 +278,20 @@ fun PlasmaAvatar(
                 val a = (s.toFloat() / steps) * (2f * PI.toFloat())
                 val harmonic = 1f +
                     0.075f * sin(a * 3f + spin * 1.4f + i) +
-                    (0.035f + energy * 0.11f) * cos(a * 4f - phase * 3.1f)
+                    (0.035f + energy * 0.12f) * cos(a * 4f - phase * 3.2f)
                 val rad = ribbonScale * harmonic
 
-                // Базовая окружность в 3D
                 val x0 = cos(a) * rad
                 val y0 = sin(a) * cosTiltX * rad
                 val z0 = sin(a) * sinTiltX * rad
 
-                // Вращение вокруг Y
                 val x1 = x0 * cosSpin - z0 * sinSpin
                 val z1 = x0 * sinSpin + z0 * cosSpin
 
-                // Наклон вокруг Z
                 val x2 = x1 * cosTiltZ - y0 * sinTiltZ
                 val y2 = x1 * sinTiltZ + y0 * cosTiltZ
 
-                val perspective = 2.9f / (2.9f - z1 * 0.62f)
+                val perspective = 2.85f / (2.85f - z1 * 0.64f)
                 val px = cx + x2 * sphereR * perspective
                 val py = cy + y2 * sphereR * perspective
                 if (s == 0) path.moveTo(px, py) else path.lineTo(px, py)
@@ -264,59 +303,57 @@ fun PlasmaAvatar(
                 else -> c3
             }
 
-            // Проход 1: мягкое широкое свечение (bloom)
             drawPath(
                 path = path,
-                color = ribbonColor.copy(alpha = 0.16f + energy * 0.10f),
+                color = ribbonColor.copy(alpha = 0.15f + energy * 0.11f),
                 style = Stroke(width = bloomStrokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
                 blendMode = BlendMode.Screen,
             )
-            // Проход 2: чёткая яркая нить
             drawPath(
                 path = path,
-                color = ribbonColor.copy(alpha = 0.56f + (i % 2) * 0.18f),
+                color = ribbonColor.copy(alpha = 0.54f + (i % 2) * 0.20f),
                 style = Stroke(width = coreStrokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
                 blendMode = BlendMode.Screen,
             )
         }
 
-        // 6. Орбитальные микрочастицы (18 светящихся искр в 3D)
-        val particleCount = 18
+        // 7. 24 орбитальные микрочастицы в 3D-пространстве
+        val particleCount = 24
         for (p in 0 until particleCount) {
-            val seed = p * 2.39996f // золотой угол
-            val orbitSpeed = 0.45f + (p % 5) * 0.14f
+            val seed = p * 2.39996f
+            val orbitSpeed = 0.42f + (p % 5) * 0.15f
             val theta = phase * orbitSpeed + seed
-            val phi = sin(phase * 0.35f + p * 0.9f) * 1.15f + (p % 3 - 1) * 0.45f
-            val dist = sphereR * (0.68f + (p % 4) * 0.13f + energy * 0.08f)
+            val phi = sin(phase * 0.35f + p * 0.9f) * 1.18f + (p % 3 - 1) * 0.48f
+            val dist = sphereR * (0.64f + (p % 4) * 0.14f + energy * 0.09f)
 
             val x3 = cos(theta) * cos(phi)
             val y3 = sin(phi)
             val z3 = sin(theta) * cos(phi)
-            val depth = (z3 + 1.2f) / 2.2f // 0..1
-            val persp = 2.6f / (2.6f - z3 * 0.55f)
+            val depth = (z3 + 1.2f) / 2.2f
+            val persp = 2.6f / (2.6f - z3 * 0.56f)
 
             val px = cx + x3 * dist * persp
             val py = cy + y3 * dist * persp
-            val twinkle = 0.45f + 0.55f * sin(phase * 3.8f + p * 1.7f)
-            val dotR = ((minDim * 0.008f) + (p % 3) * (minDim * 0.003f)) * (0.6f + depth * 0.7f)
+            val twinkle = 0.45f + 0.55f * sin(phase * 4.0f + p * 1.7f)
+            val dotR = ((minDim * 0.0075f) + (p % 3) * (minDim * 0.003f)) * (0.6f + depth * 0.75f)
             val pColor = if (p % 2 == 0) cCore else c3
 
             drawCircle(
-                color = pColor.copy(alpha = (0.28f + depth * 0.52f) * twinkle),
+                color = pColor.copy(alpha = (0.30f + depth * 0.54f) * twinkle),
                 radius = dotR.coerceAtLeast(1.1f),
                 center = Offset(px, py),
                 blendMode = BlendMode.Screen,
             )
         }
 
-        // 7. Яркое многослойное плазменное ядро в центре
-        val coreOuterR = (sphereR * (0.68f + energy * 0.14f)).coerceAtLeast(2f)
+        // 8. Многослойное плазменное ядро в центре
+        val coreOuterR = (sphereR * (0.66f + energy * 0.16f)).coerceAtLeast(2f)
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to Color.White.copy(alpha = 0.96f),
-                0.18f to cCore.copy(alpha = 0.88f),
-                0.45f to c1.copy(alpha = 0.48f + energy * 0.16f),
-                0.76f to c2.copy(alpha = 0.18f),
+                0.0f to Color.White.copy(alpha = 0.98f),
+                0.18f to cCore.copy(alpha = 0.90f),
+                0.44f to c1.copy(alpha = 0.52f + energy * 0.18f),
+                0.76f to c2.copy(alpha = 0.20f),
                 1.0f to Color.Transparent,
                 center = center,
                 radius = coreOuterR,
@@ -326,15 +363,15 @@ fun PlasmaAvatar(
             blendMode = BlendMode.Screen,
         )
 
-        // 8. Тонкий стеклянный блик на верхней левой грани сферы (объём)
+        // 9. Стеклянный блик на верхней левой грани
         val highlightR = sphereR * 0.86f
         val hlTopLeft = Offset(cx - highlightR, cy - highlightR)
         val hlSize = Size(highlightR * 2f, highlightR * 2f)
         drawArc(
             brush = Brush.linearGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.34f),
-                    cCore.copy(alpha = 0.10f),
+                    Color.White.copy(alpha = 0.36f),
+                    cCore.copy(alpha = 0.12f),
                     Color.Transparent,
                 ),
                 start = Offset(cx - highlightR, cy - highlightR),

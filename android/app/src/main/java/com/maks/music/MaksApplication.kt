@@ -1,6 +1,7 @@
 package com.maks.music
 
 import android.app.Application
+import android.content.Intent
 import com.maks.music.core.AndroidAssetProvider
 import com.maks.music.core.memory.AppraisalPolicy
 import com.maks.music.core.memory.MusicMemoryDb
@@ -15,15 +16,20 @@ import com.maks.music.core.personality.PersonalityEngine
 import com.maks.music.core.router.MusicRouter
 import com.maks.music.media.LocalLibraryScanner
 import com.maks.music.media.LocalMusicController
+import com.maks.music.media.MaksPlaybackService
 import com.maks.music.voice.LocalTtsManager
 import com.maks.music.voice.OfflineVoiceEngine
+import com.maks.music.voice.VoiceForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -61,6 +67,9 @@ class MaksApplication : Application() {
 
     private val _lastEmotion = MutableStateFlow("neutral")
     val lastEmotion: StateFlow<String> = _lastEmotion.asStateFlow()
+
+    private val _exitAppEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val exitAppEvents: SharedFlow<Unit> = _exitAppEvents.asSharedFlow()
 
     private var bannerAutoHideJob: Job? = null
 
@@ -129,7 +138,11 @@ class MaksApplication : Application() {
             },
             onCommandRecognized = { recognizedText, isHotWord ->
                 mainScope.launch {
-                    router.handleCommand(recognizedText, silentControls = isHotWord)
+                    if (isShutdownPhrase(recognizedText)) {
+                        shutdownApp()
+                    } else {
+                        router.handleCommand(recognizedText, silentControls = isHotWord)
+                    }
                 }
             },
             onListeningWindowChanged = { active ->
@@ -142,7 +155,37 @@ class MaksApplication : Application() {
     }
 
     fun submitTextCommand(text: String) {
+        if (isShutdownPhrase(text)) {
+            shutdownApp()
+            return
+        }
         router.handleCommand(text, silentControls = false)
+    }
+
+    private fun isShutdownPhrase(raw: String): Boolean {
+        val clean = raw.lowercase().trim().trimEnd('.', '!', '?')
+        return clean in SHUTDOWN_PHRASES
+    }
+
+    /**
+     * Полное выключение Макса:
+     * останавливает музыку, микрофон, оба фоновых сервиса и закрывает задачу приложения.
+     */
+    fun shutdownApp() {
+        bannerAutoHideJob?.cancel()
+        _banner.value = null
+        runCatching { ttsManager.stop() }
+        runCatching { voiceEngine.stop() }
+        runCatching { musicController.stop() }
+        runCatching { musicController.ducking.forceRestore() }
+
+        runCatching {
+            stopService(Intent(this, VoiceForegroundService::class.java))
+        }
+        runCatching {
+            stopService(Intent(this, MaksPlaybackService::class.java))
+        }
+        _exitAppEvents.tryEmit(Unit)
     }
 
     fun dismissBanner() {
@@ -168,5 +211,12 @@ class MaksApplication : Application() {
         voiceEngine.release()
         ttsManager.shutdown()
         super.onTerminate()
+    }
+
+    companion object {
+        private val SHUTDOWN_PHRASES = setOf(
+            "выключись", "выключить макса", "выключи макса",
+            "закройся", "заверши работу", "спать", "иди спать", "отключись"
+        )
     }
 }

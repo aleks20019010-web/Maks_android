@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -28,6 +29,7 @@ import com.maks.music.ui.MaksScreen
 import com.maks.music.ui.MaksTheme
 import com.maks.music.ui.MaksViewModel
 import com.maks.music.voice.VoiceForegroundService
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -107,6 +109,12 @@ class MainActivity : ComponentActivity() {
 
         hasAudioPermission = hasPermission(audioPermissionName())
 
+        lifecycleScope.launch {
+            (application as MaksApplication).exitAppEvents.collect {
+                finishAndRemoveTask()
+            }
+        }
+
         setContent {
             MaksTheme {
                 MaksScreen(
@@ -116,11 +124,14 @@ class MainActivity : ComponentActivity() {
                     onPickMusicFolder = { openMusicFolderPicker() },
                     onPushToTalk = { triggerPushToTalkWithPermission() },
                     onToggleAlwaysListening = { enabled -> toggleVoiceService(enabled) },
+                    onShutdownApp = {
+                        viewModel.shutdownApp()
+                        finishAndRemoveTask()
+                    },
                 )
             }
         }
 
-        // Запрашиваем разрешения после отрисовки окна — OEM-оболочки (MagicOS/HyperOS/OneUI) не теряют диалог
         window.decorView.post {
             requestInitialPermissions()
         }
@@ -234,7 +245,6 @@ class MainActivity : ComponentActivity() {
             pendingPushToTalk = true
             runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
         } else {
-            // Микрофон уже разрешён, дозапрашиваем только BLUETOOTH_CONNECT, но сразу запускаем PTT
             runCatching { voicePermissionsLauncher.launch(missing.toTypedArray()) }
             viewModel.triggerPushToTalk()
         }

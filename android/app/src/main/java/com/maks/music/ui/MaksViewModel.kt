@@ -35,6 +35,7 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
 
     fun submitCommand(text: String) = app.submitTextCommand(text)
     fun dismissBanner() = app.dismissBanner()
+    fun shutdownApp() = app.shutdownApp()
 
     fun togglePlayPause() = app.musicController.togglePlayPause()
     fun nextTrack() = app.musicController.next(isUserSkip = true)
