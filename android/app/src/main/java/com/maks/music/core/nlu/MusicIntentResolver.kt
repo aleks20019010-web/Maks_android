@@ -53,7 +53,7 @@ class MusicIntentResolver(
         val text = normalizedText.lowercase().trim()
         if (text.isEmpty()) return MusicIntent.UNKNOWN to 0.0
 
-        // 1. Локальные лайки («включи мою музыку», «моя музыка», «мои лайки», «любимые») — выше exactMap!
+        // 1. Локальные лайки («включи мою музыку», «моя музыка», «мои лайки», «любимые») — выше exactMap
         if (LOCAL_LIKED_PHRASES.any { text.contains(it) }) {
             return MusicIntent.MUSIC_LOCAL_LIKED to 0.98
         }
@@ -66,20 +66,20 @@ class MusicIntentResolver(
             return MusicIntent.MUSIC_LIKE to 0.96
         }
 
-        // 3. Точное совпадение по словарю (мгновенно)
+        // 3. Точное совпадение по словарю
         exactMap[text]?.let { return it to 1.0 }
 
-        // 4. Явная установка громкости («громкость 50», «звук на тридцать»)
+        // 4. Явная установка громкости
         if (volumeParser.parseVolume(text) != null) {
             return MusicIntent.VOLUME_SET to 0.96
         }
 
-        // 5. Волна («включи мою волну», «русская волна»)
+        // 5. Волна
         if (text.contains("волну") || text.contains("волна")) {
             return MusicIntent.MUSIC_WAVE to 0.95
         }
 
-        // 6. Начинается с play_trigger («включи Арию», «поставь русский рок», «вруби что-нибудь бодрое»)
+        // 6. Запуск по триггеру
         val firstWord = text.substringBefore(' ')
         if (firstWord in playTriggers || text.startsWith("хочу послушать ") || text.startsWith("давай послушаем ")) {
             return MusicIntent.MUSIC_PLAY to 0.92
