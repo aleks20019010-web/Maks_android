@@ -20,9 +20,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -35,6 +37,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,6 +50,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
+import androidx.compose.material.icons.rounded.Notes
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -51,9 +58,12 @@ import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.ThumbDownOffAlt
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,12 +92,17 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.maks.music.media.LyricLine
 import com.maks.music.media.PlayerUiState
 import com.maks.music.media.RepeatMode
+import com.maks.music.media.WaveCharacter
+import com.maks.music.media.WaveMood
+import com.maks.music.media.WaveSettings
 import com.maks.music.voice.VoiceEngineState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -95,12 +110,6 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
-
-private enum class WaveLangMode(val label: String, val filter: String?) {
-    ALL("Моя волна", null),
-    RUSSIAN("Русская волна", "russian"),
-    FOREIGN("Зарубежная", "not-russian"),
-}
 
 private val GlassSpecularBorder = Brush.verticalGradient(
     colors = listOf(
@@ -125,7 +134,7 @@ private fun Modifier.fadingEdgeMarquee(): Modifier = this
         )
     }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun NowPlayingTab(
     player: PlayerUiState,
@@ -141,6 +150,7 @@ internal fun NowPlayingTab(
     onToggleAlwaysListening: () -> Unit,
     onShutdownApp: () -> Unit,
     onOpenEq: () -> Unit,
+    onOpenQueue: () -> Unit = {},
     onSwitchToCore: () -> Unit,
     onPushToTalk: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -153,13 +163,19 @@ internal fun NowPlayingTab(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onStartWave: (String?) -> Unit,
+    onApplyWaveSettings: (WaveSettings) -> Unit = { onStartWave(it.languageFilter) },
     onPlayLiked: () -> Unit,
     onPlayArtist: (String) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
-    var waveMode by remember { mutableStateOf(WaveLangMode.ALL) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var showWaveSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(player.currentTrack?.id) {
+        if (player.currentLyrics.isEmpty()) showLyrics = false
+    }
 
     val durMs = player.durationMs.coerceAtLeast(1L)
     val sliderFraction = if (isDragging) {
@@ -168,12 +184,6 @@ internal fun NowPlayingTab(
         (player.positionMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
     }
     val shownPosMs = if (isDragging) (dragFraction * durMs).toLong() else player.positionMs
-
-    val isWaveActive = player.isPlaying && (
-        player.modeLabel == "Моя волна" ||
-            player.modeLabel == "Русская волна" ||
-            player.modeLabel == "Зарубежная волна"
-        )
 
     Column(
         modifier = Modifier
@@ -198,6 +208,22 @@ internal fun NowPlayingTab(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+                if (player.currentLyrics.isNotEmpty()) {
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showLyrics = !showLyrics
+                        },
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Notes,
+                            contentDescription = "Текст песни",
+                            tint = if (showLyrics) accent else MaksColors.TextSecondary,
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
+                }
                 IconButton(onClick = onOpenEq, modifier = Modifier.size(38.dp)) {
                     Icon(
                         imageVector = Icons.Rounded.GraphicEq,
@@ -229,7 +255,7 @@ internal fun NowPlayingTab(
             }
         }
 
-        // 2. Центральный круговой циферблат с «дышащей» обложкой на пружинной физике
+        // 2. Центральная область: «дышащая» обложка ИЛИ синхронизированный текст
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -237,35 +263,50 @@ internal fun NowPlayingTab(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            CircularArtworkDial(
-                progress = sliderFraction,
-                isPlaying = player.isPlaying,
-                accent = accent,
-                coverArt = player.coverArt,
-                trackTitle = player.currentTrack?.title,
-                avatarMode = avatarMode,
-                avatarAudioLevel = avatarAudioLevel,
-                onTapOrb = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onPushToTalk()
-                },
-                onDoubleTapLike = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onLikeOnly()
-                },
-                onSwipeNext = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onNext()
-                },
-                onSwipePrev = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onPrev()
-                },
-                modifier = Modifier
-                    .widthIn(max = 266.dp)
-                    .fillMaxWidth(0.80f)
-                    .aspectRatio(1f),
-            )
+            if (showLyrics && player.currentLyrics.isNotEmpty()) {
+                SyncedLyricsPanel(
+                    lyrics = player.currentLyrics,
+                    positionMs = shownPosMs,
+                    accent = accent,
+                    onSeekTo = { ms ->
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSeekTo(ms)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(266.dp),
+                )
+            } else {
+                CircularArtworkDial(
+                    progress = sliderFraction,
+                    isPlaying = player.isPlaying,
+                    accent = accent,
+                    coverArt = player.coverArt,
+                    trackTitle = player.currentTrack?.title,
+                    avatarMode = avatarMode,
+                    avatarAudioLevel = avatarAudioLevel,
+                    onTapOrb = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onPushToTalk()
+                    },
+                    onDoubleTapLike = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLikeOnly()
+                    },
+                    onSwipeNext = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onNext()
+                    },
+                    onSwipePrev = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onPrev()
+                    },
+                    modifier = Modifier
+                        .widthIn(max = 266.dp)
+                        .fillMaxWidth(0.80f)
+                        .aspectRatio(1f),
+                )
+            }
 
             Spacer(Modifier.height(6.dp))
 
@@ -516,85 +557,329 @@ internal fun NowPlayingTab(
             )
         }
 
-        // 6. Нижняя сдвоенная панель со спекулярным стеклянным бликом
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaksColors.SpaceSurface.copy(alpha = 0.85f))
-                .border(1.dp, GlassSpecularBorder, RoundedCornerShape(18.dp)),
-            verticalAlignment = Alignment.CenterVertically,
+        // 6. Плашка «Далее: …» + нижняя сдвоенная панель «Моя волна | Избранное»
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        if (isWaveActive) {
-                            val nextIdx = (waveMode.ordinal + 1) % WaveLangMode.entries.size
-                            waveMode = WaveLangMode.entries[nextIdx]
-                        }
-                        onStartWave(waveMode.filter)
-                    }
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaksColors.LavenderGlow,
-                    modifier = Modifier.size(17.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = waveMode.label,
-                    color = MaksColors.TextPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            val nextTrack = player.queue.getOrNull(player.currentIndex + 1)
+            if (nextTrack != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaksColors.SpaceSurface.copy(alpha = 0.62f))
+                        .border(1.dp, GlassSpecularBorder, RoundedCornerShape(12.dp))
+                        .clickable { onOpenQueue() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "Далее:",
+                        color = MaksColors.TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "${nextTrack.artist.ifBlank { "Локальный файл" }} — ${nextTrack.title}",
+                        color = MaksColors.TextSecondary,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .height(22.dp)
-                    .background(Color.White.copy(alpha = 0.12f))
-            )
-
             Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onPlayLiked()
-                    }
-                    .padding(horizontal = 12.dp),
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaksColors.SpaceSurface.copy(alpha = 0.85f))
+                    .border(1.dp, GlassSpecularBorder, RoundedCornerShape(18.dp)),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Favorite,
-                    contentDescription = null,
-                    tint = MaksColors.LikeRose,
-                    modifier = Modifier.size(17.dp),
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showWaveSheet = true
+                        }
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaksColors.LavenderGlow,
+                        modifier = Modifier.size(17.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = player.waveSettings.displayLabel(),
+                        color = MaksColors.TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(22.dp)
+                        .background(Color.White.copy(alpha = 0.12f))
                 )
-                Spacer(Modifier.width(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onPlayLiked()
+                        }
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = MaksColors.LikeRose,
+                        modifier = Modifier.size(17.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Избранное",
+                        color = MaksColors.TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+
+    if (showWaveSheet) {
+        WaveSettingsBottomSheet(
+            initialSettings = player.waveSettings,
+            accent = accent,
+            onDismiss = { showWaveSheet = false },
+            onApply = { newSettings ->
+                showWaveSheet = false
+                onApplyWaveSettings(newSettings)
+            },
+        )
+    }
+}
+
+@Composable
+private fun SyncedLyricsPanel(
+    lyrics: List<LyricLine>,
+    positionMs: Long,
+    accent: Color,
+    onSeekTo: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val listState = rememberLazyListState()
+    val hasTimings = remember(lyrics) { lyrics.any { it.timeMs >= 0L } }
+
+    val activeIndex = remember(lyrics, positionMs, hasTimings) {
+        if (!hasTimings) -1
+        else lyrics.indexOfLast { it.timeMs in 0L..positionMs }
+    }
+
+    LaunchedEffect(activeIndex) {
+        if (activeIndex >= 0) {
+            listState.animateScrollToItem((activeIndex - 1).coerceAtLeast(0))
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaksColors.SpaceSurface.copy(alpha = 0.78f))
+            .border(1.dp, GlassSpecularBorder, RoundedCornerShape(24.dp)),
+    ) {
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            itemsIndexed(lyrics) { idx, line ->
+                val isCurrent = idx == activeIndex
                 Text(
-                    text = "Избранное",
-                    color = MaksColors.TextPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    text = line.text,
+                    color = when {
+                        isCurrent -> Color.White
+                        hasTimings && idx < activeIndex -> MaksColors.TextMuted.copy(alpha = 0.55f)
+                        else -> MaksColors.TextSecondary.copy(alpha = 0.80f)
+                    },
+                    fontSize = if (isCurrent) 17.sp else 14.sp,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isCurrent) accent.copy(alpha = 0.14f) else Color.Transparent)
+                        .clickable(enabled = line.timeMs >= 0L) { onSeekTo(line.timeMs) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WaveSettingsBottomSheet(
+    initialSettings: WaveSettings,
+    accent: Color,
+    onDismiss: () -> Unit,
+    onApply: (WaveSettings) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var character by remember(initialSettings) { mutableStateOf(initialSettings.character) }
+    var mood by remember(initialSettings) { mutableStateOf(initialSettings.mood) }
+    var lang by remember(initialSettings) { mutableStateOf(initialSettings.languageFilter) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF121526),
+        contentColor = MaksColors.TextPrimary,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = "Настройка «Моей волны»",
+                color = MaksColors.TextPrimary,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+            )
+
+            // Ось 1: Характер
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Характер", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WaveCharacter.entries.forEach { item ->
+                        WaveChoiceChip(
+                            label = item.label,
+                            selected = character == item,
+                            accent = accent,
+                            onClick = { character = item },
+                        )
+                    }
+                }
+            }
+
+            // Ось 2: Настроение
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Настроение", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WaveMood.entries.forEach { item ->
+                        WaveChoiceChip(
+                            label = item.label,
+                            selected = mood == item,
+                            accent = accent,
+                            onClick = { mood = item },
+                        )
+                    }
+                }
+            }
+
+            // Ось 3: Язык
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Язык", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(null to "Любой", "russian" to "Русский", "not-russian" to "Зарубежный").forEach { (code, label) ->
+                        WaveChoiceChip(
+                            label = label,
+                            selected = lang == code,
+                            accent = accent,
+                            onClick = { lang = code },
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Brush.horizontalGradient(listOf(MaksColors.VioletAccent, accent)))
+                    .clickable {
+                        onApply(WaveSettings(character = character, mood = mood, languageFilter = lang))
+                    }
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Запустить волну",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WaveChoiceChip(
+    label: String,
+    selected: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) accent.copy(alpha = 0.22f) else MaksColors.SpaceSurface)
+            .border(
+                1.dp,
+                if (selected) accent else MaksColors.SpaceBorder,
+                RoundedCornerShape(12.dp),
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color.White else MaksColors.TextMuted,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
     }
 }
 

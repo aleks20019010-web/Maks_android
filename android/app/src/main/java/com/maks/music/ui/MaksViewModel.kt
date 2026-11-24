@@ -10,6 +10,7 @@ import com.maks.music.MaksApplication
 import com.maks.music.MaksBanner
 import com.maks.music.media.LocalTrack
 import com.maks.music.media.PlayerUiState
+import com.maks.music.media.WaveSettings
 import com.maks.music.voice.VoiceEngineState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
@@ -98,6 +99,7 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playWave(lang: String? = null) = app.musicController.playWave(lang)
+    fun playWaveWithSettings(settings: WaveSettings) = app.musicController.playWave(settings)
     fun playLiked() = app.musicController.playLocalLiked()
     fun playArtist(artist: String) = app.musicController.playArtist(artist)
     fun playFromLibrary(tracks: List<LocalTrack>, index: Int, label: String = "Медиатека") =

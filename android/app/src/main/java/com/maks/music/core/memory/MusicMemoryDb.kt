@@ -558,6 +558,20 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
         }
     }
 
+    fun getTrackPlayStats(): Map<String, Pair<Int, Long>> {
+        val out = HashMap<String, Pair<Int, Long>>()
+        readableDatabase.rawQuery(
+            "SELECT track_id, play_count, last_played FROM track_stats",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val id = c.getString(0) ?: continue
+                out[id] = c.getInt(1) to c.getLong(2)
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val DB_NAME = "memory.db"
         private const val DB_VERSION = 1

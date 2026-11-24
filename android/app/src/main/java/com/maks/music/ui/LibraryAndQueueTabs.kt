@@ -1,6 +1,11 @@
 package com.maks.music.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -349,6 +354,7 @@ internal fun LibraryTab(
                     TrackRow(
                         track = track,
                         isCurrent = isCurrent,
+                        isPlaying = player.isPlaying,
                         isLiked = isLiked,
                         accent = accent,
                         loadThumbnail = loadThumbnail,
@@ -465,6 +471,7 @@ internal fun QueueTab(
                         TrackThumbnailBox(
                             track = track,
                             isCurrent = isCurrent,
+                            isPlaying = player.isPlaying,
                             accent = accent,
                             size = 40.dp,
                             loadThumbnail = loadThumbnail,
@@ -502,6 +509,7 @@ internal fun QueueTab(
 internal fun TrackThumbnailBox(
     track: LocalTrack,
     isCurrent: Boolean,
+    isPlaying: Boolean = false,
     accent: Color,
     size: Dp,
     loadThumbnail: suspend (LocalTrack) -> Bitmap?,
@@ -533,6 +541,72 @@ internal fun TrackThumbnailBox(
                 modifier = Modifier.size(19.dp),
             )
         }
+
+        if (isCurrent) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x88080A14)),
+                contentAlignment = Alignment.Center,
+            ) {
+                MiniEqualizerBars(isPlaying = isPlaying, color = accent)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniEqualizerBars(
+    isPlaying: Boolean,
+    color: Color,
+) {
+    val infinite = rememberInfiniteTransition(label = "mini_eq")
+    val b1 by infinite.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(380),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eq_b1",
+    )
+    val b2 by infinite.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 0.30f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(520),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eq_b2",
+    )
+    val b3 by infinite.animateFloat(
+        initialValue = 0.40f,
+        targetValue = 0.90f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(440),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eq_b3",
+    )
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom,
+        modifier = Modifier.height(16.dp),
+    ) {
+        listOf(
+            if (isPlaying) b1 else 0.32f,
+            if (isPlaying) b2 else 0.55f,
+            if (isPlaying) b3 else 0.25f,
+        ).forEach { frac ->
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height((16.dp * frac).coerceAtLeast(3.dp))
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(color),
+            )
+        }
     }
 }
 
@@ -540,6 +614,7 @@ internal fun TrackThumbnailBox(
 private fun TrackRow(
     track: LocalTrack,
     isCurrent: Boolean,
+    isPlaying: Boolean,
     isLiked: Boolean,
     accent: Color,
     loadThumbnail: suspend (LocalTrack) -> Bitmap?,
@@ -559,6 +634,7 @@ private fun TrackRow(
         TrackThumbnailBox(
             track = track,
             isCurrent = isCurrent,
+            isPlaying = isPlaying,
             accent = accent,
             size = 44.dp,
             loadThumbnail = loadThumbnail,

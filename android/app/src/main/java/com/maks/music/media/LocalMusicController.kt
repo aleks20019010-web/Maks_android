@@ -36,11 +36,13 @@ enum class RepeatMode {
 data class PlayerUiState(
     val currentTrack: LocalTrack? = null,
     val coverArt: Bitmap? = null,
+    val currentLyrics: List<LyricLine> = emptyList(),
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val isCurrentLiked: Boolean = false,
     val modeLabel: String = "Моя волна",
+    val waveSettings: WaveSettings = WaveSettings(),
     val libraryCount: Int = 0,
     val allTracks: List<LocalTrack> = emptyList(),
     val likedTrackIds: Set<String> = emptySet(),
@@ -91,7 +93,7 @@ class LocalMusicController(
     private var queue: List<LocalTrack> = emptyList()
     private var originalQueue: List<LocalTrack> = emptyList()
     private var currentIndex: Int = -1
-    private var currentLanguageFilter: String? = null
+    private var currentWaveSettings: WaveSettings = WaveSettings()
     private var progressJob: Job? = null
     private var sleepTimerJob: Job? = null
 
@@ -173,15 +175,16 @@ class LocalMusicController(
     }
 
     fun playWave(languageFilter: String? = null): Boolean {
-        currentLanguageFilter = languageFilter
-        val list = waveEngine.buildWaveQueue(scanner.allTracks(), languageFilter)
+        val updated = currentWaveSettings.copy(languageFilter = languageFilter)
+        return playWave(updated)
+    }
+
+    fun playWave(settings: WaveSettings): Boolean {
+        currentWaveSettings = settings
+        val list = waveEngine.buildWaveQueue(scanner.allTracks(), settings)
         if (list.isEmpty()) return false
-        val label = when (languageFilter) {
-            "russian" -> "Русская волна"
-            "not-russian" -> "Зарубежная волна"
-            else -> "Моя волна"
-        }
-        startQueue(list, label)
+        _uiState.update { it.copy(waveSettings = settings) }
+        startQueue(list, settings.displayLabel())
         return true
     }
 
@@ -330,7 +333,7 @@ class LocalMusicController(
         val shouldFadeIn = !isUserSkip && _uiState.value.crossfadeSec > 0f
 
         if (queue.isEmpty()) {
-            return if (playWave(currentLanguageFilter)) currentTrack() else null
+            return if (playWave(currentWaveSettings)) currentTrack() else null
         }
 
         if (!isUserSkip && _uiState.value.repeatMode == RepeatMode.ONE) {
@@ -352,7 +355,7 @@ class LocalMusicController(
             return currentTrack()
         }
 
-        val nextWave = waveEngine.buildWaveQueue(scanner.allTracks(), currentLanguageFilter)
+        val nextWave = waveEngine.buildWaveQueue(scanner.allTracks(), currentWaveSettings)
         if (nextWave.isEmpty()) return null
         startQueue(nextWave, _uiState.value.modeLabel, useFadeIn = shouldFadeIn)
         return currentTrack()
@@ -603,6 +606,7 @@ class LocalMusicController(
                 it.copy(
                     currentTrack = track,
                     coverArt = null,
+                    currentLyrics = emptyList(),
                     durationMs = track.durationMs,
                     positionMs = 0L,
                     isCurrentLiked = initialLiked,
@@ -635,6 +639,7 @@ class LocalMusicController(
             it.copy(
                 currentTrack = track,
                 coverArt = null,
+                currentLyrics = emptyList(),
                 durationMs = track.durationMs,
                 positionMs = 0L,
                 isCurrentLiked = initialLiked,
@@ -647,12 +652,14 @@ class LocalMusicController(
             val liked = runCatching { memoryDb.isLiked(track.artist, track.title) }.getOrDefault(false)
             val cover = scanner.loadCoverArt(track)
             val artBytes = cover?.let { bitmapToJpegBytes(it) }
+            val lyrics = runCatching { LyricsExtractor.extract(context, track.contentUri) }.getOrDefault(emptyList())
 
             withContext(Dispatchers.Main) {
                 if (currentTrack()?.id == track.id) {
                     _uiState.update {
                         it.copy(
                             coverArt = cover,
+                            currentLyrics = lyrics,
                             isCurrentLiked = liked,
                         )
                     }
