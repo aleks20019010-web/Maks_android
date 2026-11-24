@@ -52,9 +52,6 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.Notes
 import androidx.compose.material.icons.rounded.PowerSettingsNew
-import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.rounded.RepeatOne
-import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.ThumbDownOffAlt
@@ -99,7 +96,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.maks.music.media.LyricLine
 import com.maks.music.media.PlayerUiState
-import com.maks.music.media.RepeatMode
 import com.maks.music.media.WaveCharacter
 import com.maks.music.media.WaveMood
 import com.maks.music.media.WaveSettings
@@ -160,8 +156,8 @@ internal fun NowPlayingTab(
     onToggleLike: () -> Unit,
     onLikeOnly: () -> Unit,
     onDislike: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onToggleShuffle: () -> Unit = {},
+    onCycleRepeat: () -> Unit = {},
     onStartWave: (String?) -> Unit,
     onApplyWaveSettings: (WaveSettings) -> Unit = { onStartWave(it.languageFilter) },
     onPlayLiked: () -> Unit,
@@ -333,99 +329,76 @@ internal fun NowPlayingTab(
             }
         }
 
-        // 3. Бегущая строка названия трека + Кликабельный Артист + Дизлайк / Пружинный Лайк
-        Row(
+        // 3. Название трека + Кликабельный Артист по центру под обложкой
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = player.currentTrack?.title ?: "Включите Мою волну",
-                    color = MaksColors.TextPrimary,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.2).sp,
-                    maxLines = 1,
+            Text(
+                text = player.currentTrack?.title ?: "Включите Мою волну",
+                color = MaksColors.TextPrimary,
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.2).sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fadingEdgeMarquee()
+                    .basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        initialDelayMillis = 2200,
+                        velocity = 34.dp,
+                    ),
+            )
+            Spacer(Modifier.height(3.dp))
+            val curTrack = player.currentTrack
+            if (curTrack != null && curTrack.artist.isNotBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
                     modifier = Modifier
                         .fillMaxWidth()
                         .fadingEdgeMarquee()
                         .basicMarquee(
                             iterations = Int.MAX_VALUE,
-                            initialDelayMillis = 2200,
-                            velocity = 34.dp,
+                            initialDelayMillis = 2800,
+                            velocity = 30.dp,
                         ),
-                )
-                Spacer(Modifier.height(2.dp))
-                val curTrack = player.currentTrack
-                if (curTrack != null && curTrack.artist.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .fadingEdgeMarquee()
-                            .basicMarquee(
-                                iterations = Int.MAX_VALUE,
-                                initialDelayMillis = 2800,
-                                velocity = 30.dp,
-                            ),
-                    ) {
-                        Text(
-                            text = curTrack.artist,
-                            color = MaksColors.LavenderGlow.copy(alpha = 0.90f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onPlayArtist(curTrack.artist)
-                                }
-                                .padding(end = 2.dp),
-                        )
-                        if (curTrack.album.isNotBlank()) {
-                            Text(
-                                text = " · ${curTrack.album}",
-                                color = MaksColors.TextMuted,
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                } else {
+                ) {
                     Text(
-                        text = if (curTrack != null) "Локальный файл" else "Нажмите Play или откройте медиатеку",
-                        color = MaksColors.TextMuted,
+                        text = curTrack.artist,
+                        color = MaksColors.LavenderGlow.copy(alpha = 0.92f),
                         fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onPlayArtist(curTrack.artist)
+                            }
+                            .padding(horizontal = 4.dp),
                     )
+                    if (curTrack.album.isNotBlank()) {
+                        Text(
+                            text = "· ${curTrack.album}",
+                            color = MaksColors.TextMuted,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                        )
+                    }
                 }
-            }
-
-            IconButton(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onDislike()
-                },
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ThumbDownOffAlt,
-                    contentDescription = "Не нравится",
-                    tint = MaksColors.TextMuted,
-                    modifier = Modifier.size(20.dp),
+            } else {
+                Text(
+                    text = if (curTrack != null) "Локальный файл" else "Нажмите Play или откройте медиатеку",
+                    color = MaksColors.TextMuted,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            AnimatedLikeButton(
-                isLiked = player.isCurrentLiked,
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onToggleLike()
-                },
-            )
         }
 
         if (!hasAudioPermission || player.libraryCount == 0) {
@@ -512,19 +485,22 @@ internal fun NowPlayingTab(
             }
         }
 
-        // 5. Кнопки управления воспроизведением
+        // 5. Кнопки управления воспроизведением: Дизлайк | Назад | Play/Pause | Вперёд | Лайк
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HardwareCircleButton(
-                icon = Icons.Rounded.Shuffle,
-                contentDescription = "Перемешать",
-                size = 42.dp,
-                iconSize = 18.dp,
-                active = player.isShuffle,
-                onClick = onToggleShuffle,
+                icon = Icons.Rounded.ThumbDownOffAlt,
+                contentDescription = "Не нравится",
+                size = 44.dp,
+                iconSize = 20.dp,
+                active = false,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDislike()
+                },
             )
             HardwareCircleButton(
                 icon = Icons.Rounded.SkipPrevious,
@@ -547,13 +523,12 @@ internal fun NowPlayingTab(
                 active = false,
                 onClick = onNext,
             )
-            HardwareCircleButton(
-                icon = if (player.repeatMode == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-                contentDescription = "Повтор",
-                size = 42.dp,
-                iconSize = 18.dp,
-                active = player.repeatMode != RepeatMode.OFF,
-                onClick = onCycleRepeat,
+            AnimatedLikeButton(
+                isLiked = player.isCurrentLiked,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onToggleLike()
+                },
             )
         }
 
@@ -773,7 +748,6 @@ private fun WaveSettingsBottomSheet(
                 fontWeight = FontWeight.Bold,
             )
 
-            // Ось 1: Характер
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Характер", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Row(
@@ -793,7 +767,6 @@ private fun WaveSettingsBottomSheet(
                 }
             }
 
-            // Ось 2: Настроение
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Настроение", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Row(
@@ -813,7 +786,6 @@ private fun WaveSettingsBottomSheet(
                 }
             }
 
-            // Ось 3: Язык
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Язык", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Row(
@@ -907,7 +879,7 @@ private fun AnimatedLikeButton(
     }
 
     Box(
-        modifier = Modifier.size(42.dp),
+        modifier = Modifier.size(44.dp),
         contentAlignment = Alignment.Center,
     ) {
         if (ringProgress.value > 0.01f) {
@@ -923,14 +895,18 @@ private fun AnimatedLikeButton(
         }
         IconButton(
             onClick = onClick,
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaksColors.SpaceSurface)
+                .border(1.dp, if (isLiked) MaksColors.LikeRose.copy(alpha = 0.45f) else MaksColors.SpaceBorder, CircleShape),
         ) {
             Icon(
                 imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                 contentDescription = "Нравится",
                 tint = if (isLiked) MaksColors.LikeRose else MaksColors.TextSecondary,
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(20.dp)
                     .scale(heartScale.value),
             )
         }

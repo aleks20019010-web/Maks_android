@@ -101,13 +101,13 @@ private fun extractAmbientPalette(coverArt: Bitmap?, modeLabel: String): Ambient
         modeLabel.contains("лайк", ignoreCase = true) || modeLabel.contains("Избранное", ignoreCase = true) ->
             AmbientPalette(
                 primary = MaksColors.LikeRose,
-                secondary = Color(0xFF9C27B0),
+                secondary = Color(0xFFD500F9),
                 tertiary = MaksColors.VioletAccent,
             )
         modeLabel.contains("бодр", ignoreCase = true) || modeLabel.contains("энерг", ignoreCase = true) ->
             AmbientPalette(
-                primary = Color(0xFFFFA726),
-                secondary = Color(0xFFFF5722),
+                primary = Color(0xFFFFB300),
+                secondary = Color(0xFFFF3D00),
                 tertiary = MaksColors.VioletAccent,
             )
         else ->
@@ -131,9 +131,9 @@ private fun extractAmbientPalette(coverArt: Bitmap?, modeLabel: String): Ambient
                 AndroidColor.colorToHSV(pixel, hsv)
                 val sat = hsv[1]
                 val value = hsv[2]
-                if (value > 0.18f && sat > 0.15f) {
-                    val boostedV = value.coerceIn(0.42f, 0.92f)
-                    val boostedS = sat.coerceIn(0.35f, 0.90f)
+                if (value > 0.16f && sat > 0.14f) {
+                    val boostedS = sat.coerceIn(0.60f, 1.0f)
+                    val boostedV = value.coerceIn(0.60f, 1.0f)
                     val colorInt = AndroidColor.HSVToColor(floatArrayOf(hsv[0], boostedS, boostedV))
                     candidates += Color(colorInt) to (sat * value)
                 }
@@ -161,7 +161,7 @@ private fun LiveMeshGradientBackground(
     val c2 by animateColorAsState(palette.secondary, tween(1200), label = "mesh_c2")
     val c3 by animateColorAsState(palette.tertiary, tween(1200), label = "mesh_c3")
     val intensity by animateFloatAsState(
-        targetValue = if (isPlaying) 1.0f else 0.45f,
+        targetValue = if (isPlaying) 1.0f else 0.55f,
         animationSpec = tween(900),
         label = "mesh_intensity",
     )
@@ -171,7 +171,7 @@ private fun LiveMeshGradientBackground(
         initialValue = 0f,
         targetValue = (2.0 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 16_000, easing = LinearEasing),
+            animation = tween(durationMillis = 14_000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "mesh_phase",
@@ -182,16 +182,16 @@ private fun LiveMeshGradientBackground(
         val h = size.height
         if (w <= 4f || h <= 4f) return@Canvas
 
-        // 1-е пятно: орбита вокруг обложки
+        // 1-е пятно: яркое перетекание вокруг обложки
         val p1 = Offset(
-            x = w * (0.50f + 0.22f * cos(phase)),
-            y = h * (0.24f + 0.10f * sin(phase * 1.2f)),
+            x = w * (0.50f + 0.24f * cos(phase)),
+            y = h * (0.24f + 0.11f * sin(phase * 1.2f)),
         )
-        val r1 = size.maxDimension * (0.52f + 0.05f * sin(phase))
+        val r1 = size.maxDimension * (0.58f + 0.06f * sin(phase))
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to c1.copy(alpha = 0.24f * intensity),
-                0.55f to c1.copy(alpha = 0.08f * intensity),
+                0.0f to c1.copy(alpha = 0.48f * intensity),
+                0.50f to c1.copy(alpha = 0.20f * intensity),
                 1.0f to Color.Transparent,
                 center = p1,
                 radius = r1,
@@ -201,16 +201,16 @@ private fun LiveMeshGradientBackground(
             blendMode = BlendMode.Screen,
         )
 
-        // 2-е пятно: противофазное перетекание слева/снизу
+        // 2-е пятно: противофазный поток слева/снизу
         val p2 = Offset(
-            x = w * (0.28f + 0.26f * sin(phase * 0.8f + 1.4f)),
-            y = h * (0.42f + 0.14f * cos(phase * 0.9f)),
+            x = w * (0.26f + 0.28f * sin(phase * 0.8f + 1.4f)),
+            y = h * (0.44f + 0.15f * cos(phase * 0.9f)),
         )
-        val r2 = size.maxDimension * (0.48f + 0.04f * cos(phase))
+        val r2 = size.maxDimension * (0.54f + 0.05f * cos(phase))
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to c2.copy(alpha = 0.20f * intensity),
-                0.60f to c2.copy(alpha = 0.06f * intensity),
+                0.0f to c2.copy(alpha = 0.42f * intensity),
+                0.55f to c2.copy(alpha = 0.16f * intensity),
                 1.0f to Color.Transparent,
                 center = p2,
                 radius = r2,
@@ -220,16 +220,16 @@ private fun LiveMeshGradientBackground(
             blendMode = BlendMode.Screen,
         )
 
-        // 3-е пятно: мягкий правый акцент
+        // 3-е пятно: правый акцент
         val p3 = Offset(
-            x = w * (0.76f + 0.18f * cos(phase * 1.1f + 2.6f)),
-            y = h * (0.32f + 0.16f * sin(phase * 0.7f + 0.8f)),
+            x = w * (0.76f + 0.20f * cos(phase * 1.1f + 2.6f)),
+            y = h * (0.30f + 0.16f * sin(phase * 0.7f + 0.8f)),
         )
-        val r3 = size.maxDimension * 0.44f
+        val r3 = size.maxDimension * 0.50f
         drawCircle(
             brush = Brush.radialGradient(
-                0.0f to c3.copy(alpha = 0.16f * intensity),
-                0.60f to c3.copy(alpha = 0.05f * intensity),
+                0.0f to c3.copy(alpha = 0.36f * intensity),
+                0.55f to c3.copy(alpha = 0.12f * intensity),
                 1.0f to Color.Transparent,
                 center = p3,
                 radius = r3,
@@ -298,7 +298,6 @@ fun MaksScreen(
                 )
             )
     ) {
-        // Живой переливающийся mesh-градиент от палитры текущей обложки и режима
         LiveMeshGradientBackground(
             palette = palette,
             isPlaying = player.isPlaying || ttsSpeaking,
@@ -333,6 +332,7 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onOpenEq = { activeTab = MainTab.EQ },
+                                onOpenQueue = { activeTab = MainTab.QUEUE },
                                 onSwitchToCore = { playerViewMode = PlayerViewMode.MAKS_CORE },
                                 onPushToTalk = onPushToTalk,
                                 onTogglePlayPause = { viewModel.togglePlayPause() },
@@ -347,10 +347,9 @@ fun MaksScreen(
                                 onToggleShuffle = { viewModel.toggleShuffle() },
                                 onCycleRepeat = { viewModel.cycleRepeatMode() },
                                 onStartWave = { langFilter -> viewModel.playWave(langFilter) },
+                                onApplyWaveSettings = viewModel::playWaveWithSettings,
                                 onPlayLiked = { viewModel.playLiked() },
                                 onPlayArtist = { artist -> viewModel.playArtist(artist) },
-                                onOpenQueue = { activeTab = MainTab.QUEUE },
-                                onApplyWaveSettings = viewModel::playWaveWithSettings,
                             )
                         } else {
                             MaksCoreTab(
