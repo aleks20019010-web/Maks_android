@@ -1,4 +1,4 @@
-package com.maks.music.ui
+﻿package com.maks.music.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
@@ -578,7 +578,7 @@ private fun BottomNavBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xE8080911))
-            .border(1.dp, SpecularGlassBorder)
+            .border(1.dp, SpecularGlassBorder, RoundedCornerShape(0.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically,
