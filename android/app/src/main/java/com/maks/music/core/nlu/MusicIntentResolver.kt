@@ -58,11 +58,11 @@ class MusicIntentResolver(
             return MusicIntent.MUSIC_LOCAL_LIKED to 0.98
         }
 
-        // 2. Явные лайки / дизлайки текущего трека
+        // 2. Явные дизлайки и лайки текущего трека
         if (text.contains("не нравится") || text.contains("дизлайк") || text.contains("убери трек") || text.contains("больше не ставь")) {
             return MusicIntent.MUSIC_DISLIKE to 0.96
         }
-        if (text.contains("мне нравится") || text == "лайк" || text.contains("лайкни") || text.contains("в любимые") || text.contains("в избранное")) {
+        if (text == "лайк" || text.contains("мне нравится") || text.contains("лайкни") || text.contains("поставь лайк") || text.contains("в любимые") || text.contains("в избранное")) {
             return MusicIntent.MUSIC_LIKE to 0.96
         }
 
