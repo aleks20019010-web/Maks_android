@@ -6,12 +6,7 @@ import android.graphics.RuntimeShader
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,11 +41,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,7 +67,6 @@ import androidx.compose.ui.unit.sp
 import com.maks.music.MaksBanner
 import com.maks.music.media.PlayerUiState
 import com.maks.music.voice.VoiceEngineState
-import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -221,24 +218,32 @@ private fun LiveMeshGradientBackground(
         animationSpec = tween(800),
         label = "mesh_intensity",
     )
-
-    val infinite = rememberInfiniteTransition(label = "mesh_flow")
-    val phase by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = (2.0 * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 16_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "mesh_phase",
+    val speed by animateFloatAsState(
+        targetValue = if (isPlaying) 1.0f else 0.25f,
+        animationSpec = tween(600),
+        label = "mesh_speed",
     )
+
+    var timeSec by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var lastNanos = 0L
+        while (true) {
+            withFrameNanos { frameNanos ->
+                if (lastNanos != 0L) {
+                    val dt = ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.1f)
+                    timeSec += dt * speed
+                }
+                lastNanos = frameNanos
+            }
+        }
+    }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val shader = remember { RuntimeShader(YANDEX_WAVE_AGSL) }
         Canvas(modifier = modifier) {
             if (size.width <= 4f || size.height <= 4f) return@Canvas
             shader.setFloatUniform("iResolution", size.width, size.height)
-            shader.setFloatUniform("iTime", phase * 2.5f)
+            shader.setFloatUniform("iTime", timeSec)
             shader.setFloatUniform("iIntensity", intensity)
             shader.setFloatUniform("c1", c1.red, c1.green, c1.blue)
             shader.setFloatUniform("c2", c2.red, c2.green, c2.blue)
@@ -252,6 +257,7 @@ private fun LiveMeshGradientBackground(
             if (w <= 4f || h <= 4f) return@Canvas
             drawRect(Color.Black)
 
+            val phase = timeSec * 0.4f
             val p1 = Offset(w * (0.50f + 0.24f * cos(phase)), h * (0.22f + 0.10f * sin(phase * 1.2f)))
             val r1 = size.maxDimension * 0.58f
             drawCircle(

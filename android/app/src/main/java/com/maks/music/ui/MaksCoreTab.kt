@@ -120,7 +120,7 @@ internal fun MaksCoreTab(
                     .widthIn(max = 264.dp)
                     .fillMaxWidth(0.76f)
                     .aspectRatio(1f)
-                    .clip(CircleShape)
+                    .clip(RoundedCornerShape(24.dp))
                     .clickable { onPushToTalk() },
                 contentAlignment = Alignment.Center,
             ) {
