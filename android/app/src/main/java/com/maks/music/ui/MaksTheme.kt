@@ -8,28 +8,28 @@ import androidx.compose.ui.graphics.Color
 import android.graphics.Color as AndroidColor
 
 object MaksColors {
-    // Velvet Midnight Obsidian & Indigo Glass Palette (inspired by EQ Studio hardware UI)
-    val SpaceBg = Color(0xFF0A0B13)
-    val SpaceBgDeep = Color(0xFF06070D)
-    val SpaceSurface = Color(0xFF121422)
-    val SpaceSurfaceElevated = Color(0xFF181B2C)
-    val SpaceSurfaceRecessed = Color(0xFF0E101B)
-    val SpaceBorder = Color(0x18FFFFFF)
-    val SpaceBorderGlow = Color(0x4D8B5CF6)
+    // Deep OLED Obsidian & High-Contrast Indigo Glass Palette
+    val SpaceBg = Color(0xFF05060A)
+    val SpaceBgDeep = Color(0xFF000000)
+    val SpaceSurface = Color(0xFF0D0F1A)
+    val SpaceSurfaceElevated = Color(0xFF151829)
+    val SpaceSurfaceRecessed = Color(0xFF080A12)
+    val SpaceBorder = Color(0x26FFFFFF)
+    val SpaceBorderGlow = Color(0x7A9353FF)
 
-    // Signature Violet -> Sky-Cyan Luminous Accents
-    val VioletAccent = Color(0xFF8B5CF6)
-    val LavenderGlow = Color(0xFFA78BFA)
-    val CyanAccent = Color(0xFF4FD1FF)
-    val TealAccent = Color(0xFF2DD4BF)
+    // Vivid Violet -> Electric Cyan Luminous Accents
+    val VioletAccent = Color(0xFF9353FF)
+    val LavenderGlow = Color(0xFFBA94FF)
+    val CyanAccent = Color(0xFF00E5FF)
+    val TealAccent = Color(0xFF00F5D4)
 
-    // Typography hierarchy
-    val TextPrimary = Color(0xFFF5F7FF)
-    val TextSecondary = Color(0xFFC5CCE2)
-    val TextMuted = Color(0xFF77809E)
+    // High-Contrast Typography Hierarchy
+    val TextPrimary = Color(0xFFFFFFFF)
+    val TextSecondary = Color(0xFFDCE2F5)
+    val TextMuted = Color(0xFF94A0C4)
 
-    val LikeRose = Color(0xFFFB7185)
-    val WarningAmber = Color(0xFFF59E0B)
+    val LikeRose = Color(0xFFFF3366)
+    val WarningAmber = Color(0xFFFFB000)
 }
 
 private val MaksDarkScheme = darkColorScheme(
@@ -54,8 +54,8 @@ fun MaksTheme(content: @Composable () -> Unit) {
 }
 
 /**
- * Извлекает сбалансированный акцентный цвет из обложки трека
- * (либо возвращает фирменный небесно-голубой акцент при отсутствии обложки).
+ * Извлекает сочный акцентный цвет из обложки трека
+ * (либо возвращает фирменный неоново-голубой акцент при отсутствии обложки).
  */
 fun extractAccentColor(bitmap: Bitmap?): Color {
     if (bitmap == null || bitmap.isRecycled) return MaksColors.CyanAccent
@@ -73,7 +73,7 @@ fun extractAccentColor(bitmap: Bitmap?): Color {
                 AndroidColor.colorToHSV(px, hsv)
                 val s = hsv[1]
                 val v = hsv[2]
-                val w = (0.2f + s * 1.8f) * (1f - kotlin.math.abs(v - 0.55f))
+                val w = (0.2f + s * 2.0f) * (1f - kotlin.math.abs(v - 0.55f))
                 rSum += AndroidColor.red(px) * w
                 gSum += AndroidColor.green(px) * w
                 bSum += AndroidColor.blue(px) * w
@@ -89,8 +89,8 @@ fun extractAccentColor(bitmap: Bitmap?): Color {
             (bSum / wSum).toInt().coerceIn(0, 255),
         )
         AndroidColor.colorToHSV(rgb, hsv)
-        hsv[1] = hsv[1].coerceIn(0.45f, 0.80f)
-        hsv[2] = hsv[2].coerceIn(0.60f, 0.90f)
+        hsv[1] = hsv[1].coerceIn(0.65f, 1.0f)
+        hsv[2] = hsv[2].coerceIn(0.75f, 1.0f)
         Color(AndroidColor.HSVToColor(hsv))
     }.getOrDefault(MaksColors.CyanAccent)
 }

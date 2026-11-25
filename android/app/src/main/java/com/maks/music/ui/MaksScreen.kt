@@ -2,6 +2,8 @@
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
+import android.graphics.RuntimeShader
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -56,6 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -95,6 +98,59 @@ private val SpecularGlassBorder = Brush.verticalGradient(
         Color.White.copy(alpha = 0.03f),
     )
 )
+
+private const val YANDEX_WAVE_AGSL = """
+    uniform float2 iResolution;
+    uniform float iTime;
+    uniform float iIntensity;
+    uniform float3 c1;
+    uniform float3 c2;
+    uniform float3 c3;
+
+    half4 main(float2 fragCoord) {
+        float2 uv = fragCoord / max(iResolution, float2(1.0));
+        float aspect = iResolution.x / max(iResolution.y, 1.0);
+        float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.30);
+
+        float t = iTime * 0.42;
+
+        // Искривление пространства (domain warping) для эффекта жидкого шёлка
+        float2 q = p;
+        q.x += 0.34 * sin(q.y * 3.1 + t * 1.1) + 0.16 * cos(q.x * 2.4 - t * 0.7);
+        q.y += 0.32 * cos(q.x * 2.9 - t * 0.9) + 0.14 * sin(q.y * 2.7 + t * 0.8);
+
+        float2 r = q;
+        r.x += 0.24 * sin(q.y * 4.4 - t * 1.3 + 1.2);
+        r.y += 0.24 * cos(q.x * 4.1 + t * 1.0 + 0.6);
+
+        // Базовое перетекание трёх цветов
+        float m1 = 0.5 + 0.5 * sin(r.x * 2.2 + r.y * 1.8 + t);
+        float m2 = 0.5 + 0.5 * cos(r.x * 1.9 - r.y * 2.4 - t * 0.8);
+        float3 baseCol = mix(c1, c2, m1);
+        baseCol = mix(baseCol, c3, m2 * 0.55);
+
+        // Тонкие светящиеся «жилки» / ленты каустики
+        float w1 = abs(sin(r.x * 3.4 + r.y * 2.6 + t * 0.9));
+        float w2 = abs(sin(r.x * 2.3 - r.y * 3.7 - t * 1.1 + 1.7));
+        float ridge1 = pow(clamp(1.0 - w1, 0.0, 1.0), 6.5);
+        float ridge2 = pow(clamp(1.0 - w2, 0.0, 1.0), 7.5);
+        float veins = (ridge1 * 0.65 + ridge2 * 0.45);
+
+        // Мягкие лучи света от центра обложки
+        float angle = atan(p.y, p.x);
+        float rays = pow(0.5 + 0.5 * sin(angle * 5.0 + t * 0.6), 4.0) * 0.20;
+
+        // Вертикальная маска: сочный свет сверху и резкий уход в чистый чёрный ниже середины
+        float topGlow = smoothstep(0.76, 0.04, uv.y);
+        float centerBoost = exp(-dot(p * float2(1.15, 1.35), p * float2(1.15, 1.35)) * 1.7);
+        float mask = clamp(topGlow * 0.82 + centerBoost * 0.48, 0.0, 1.0) * smoothstep(0.84, 0.50, uv.y);
+
+        float3 color = baseCol * (0.68 + rays) + mix(baseCol, float3(1.0), 0.58) * veins;
+        color *= mask * iIntensity;
+
+        return half4(clamp(color, 0.0, 1.0), 1.0);
+    }
+"""
 
 private fun extractAmbientPalette(coverArt: Bitmap?, modeLabel: String): AmbientPalette {
     val modeDefault = when {
@@ -157,12 +213,12 @@ private fun LiveMeshGradientBackground(
     isPlaying: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val c1 by animateColorAsState(palette.primary, tween(1200), label = "mesh_c1")
-    val c2 by animateColorAsState(palette.secondary, tween(1200), label = "mesh_c2")
-    val c3 by animateColorAsState(palette.tertiary, tween(1200), label = "mesh_c3")
+    val c1 by animateColorAsState(palette.primary, tween(1100), label = "mesh_c1")
+    val c2 by animateColorAsState(palette.secondary, tween(1100), label = "mesh_c2")
+    val c3 by animateColorAsState(palette.tertiary, tween(1100), label = "mesh_c3")
     val intensity by animateFloatAsState(
-        targetValue = if (isPlaying) 1.0f else 0.55f,
-        animationSpec = tween(900),
+        targetValue = if (isPlaying) 1.0f else 0.58f,
+        animationSpec = tween(800),
         label = "mesh_intensity",
     )
 
@@ -171,73 +227,69 @@ private fun LiveMeshGradientBackground(
         initialValue = 0f,
         targetValue = (2.0 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 14_000, easing = LinearEasing),
+            animation = tween(durationMillis = 16_000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "mesh_phase",
     )
 
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        if (w <= 4f || h <= 4f) return@Canvas
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val shader = remember { RuntimeShader(YANDEX_WAVE_AGSL) }
+        Canvas(modifier = modifier) {
+            if (size.width <= 4f || size.height <= 4f) return@Canvas
+            shader.setFloatUniform("iResolution", size.width, size.height)
+            shader.setFloatUniform("iTime", phase * 2.5f)
+            shader.setFloatUniform("iIntensity", intensity)
+            shader.setFloatUniform("c1", c1.red, c1.green, c1.blue)
+            shader.setFloatUniform("c2", c2.red, c2.green, c2.blue)
+            shader.setFloatUniform("c3", c3.red, c3.green, c3.blue)
+            drawRect(brush = ShaderBrush(shader))
+        }
+    } else {
+        Canvas(modifier = modifier) {
+            val w = size.width
+            val h = size.height
+            if (w <= 4f || h <= 4f) return@Canvas
+            drawRect(Color.Black)
 
-        // 1-е пятно: яркое перетекание вокруг обложки
-        val p1 = Offset(
-            x = w * (0.50f + 0.24f * cos(phase)),
-            y = h * (0.24f + 0.11f * sin(phase * 1.2f)),
-        )
-        val r1 = size.maxDimension * (0.58f + 0.06f * sin(phase))
-        drawCircle(
-            brush = Brush.radialGradient(
-                0.0f to c1.copy(alpha = 0.48f * intensity),
-                0.50f to c1.copy(alpha = 0.20f * intensity),
-                1.0f to Color.Transparent,
-                center = p1,
+            val p1 = Offset(w * (0.50f + 0.24f * cos(phase)), h * (0.22f + 0.10f * sin(phase * 1.2f)))
+            val r1 = size.maxDimension * 0.58f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    0.0f to c1.copy(alpha = 0.72f * intensity),
+                    0.50f to c1.copy(alpha = 0.28f * intensity),
+                    1.0f to Color.Transparent,
+                    center = p1,
+                    radius = r1,
+                ),
                 radius = r1,
-            ),
-            radius = r1,
-            center = p1,
-            blendMode = BlendMode.Screen,
-        )
+                center = p1,
+                blendMode = BlendMode.Screen,
+            )
 
-        // 2-е пятно: противофазный поток слева/снизу
-        val p2 = Offset(
-            x = w * (0.26f + 0.28f * sin(phase * 0.8f + 1.4f)),
-            y = h * (0.44f + 0.15f * cos(phase * 0.9f)),
-        )
-        val r2 = size.maxDimension * (0.54f + 0.05f * cos(phase))
-        drawCircle(
-            brush = Brush.radialGradient(
-                0.0f to c2.copy(alpha = 0.42f * intensity),
-                0.55f to c2.copy(alpha = 0.16f * intensity),
-                1.0f to Color.Transparent,
-                center = p2,
+            val p2 = Offset(w * (0.28f + 0.26f * sin(phase * 0.8f + 1.4f)), h * (0.36f + 0.12f * cos(phase * 0.9f)))
+            val r2 = size.maxDimension * 0.52f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    0.0f to c2.copy(alpha = 0.60f * intensity),
+                    0.55f to c2.copy(alpha = 0.20f * intensity),
+                    1.0f to Color.Transparent,
+                    center = p2,
+                    radius = r2,
+                ),
                 radius = r2,
-            ),
-            radius = r2,
-            center = p2,
-            blendMode = BlendMode.Screen,
-        )
+                center = p2,
+                blendMode = BlendMode.Screen,
+            )
 
-        // 3-е пятно: правый акцент
-        val p3 = Offset(
-            x = w * (0.76f + 0.20f * cos(phase * 1.1f + 2.6f)),
-            y = h * (0.30f + 0.16f * sin(phase * 0.7f + 0.8f)),
-        )
-        val r3 = size.maxDimension * 0.50f
-        drawCircle(
-            brush = Brush.radialGradient(
-                0.0f to c3.copy(alpha = 0.36f * intensity),
-                0.55f to c3.copy(alpha = 0.12f * intensity),
-                1.0f to Color.Transparent,
-                center = p3,
-                radius = r3,
-            ),
-            radius = r3,
-            center = p3,
-            blendMode = BlendMode.Screen,
-        )
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0.0f to Color.Transparent,
+                    0.52f to Color.Black.copy(alpha = 0.35f),
+                    0.78f to Color.Black,
+                )
+            )
+        }
     }
 }
 
@@ -261,7 +313,7 @@ fun MaksScreen(
     val palette = remember(player.coverArt, player.modeLabel) {
         extractAmbientPalette(player.coverArt, player.modeLabel)
     }
-    val accent by animateColorAsState(palette.primary, tween(1200), label = "ambient_accent")
+    val accent by animateColorAsState(palette.primary, tween(1100), label = "ambient_accent")
 
     val alwaysListening = voiceState == VoiceEngineState.LISTENING_WAKE ||
         voiceState == VoiceEngineState.LISTENING_COMMAND
@@ -288,15 +340,7 @@ fun MaksScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF101324),
-                        MaksColors.SpaceBg,
-                        MaksColors.SpaceBgDeep,
-                    )
-                )
-            )
+            .background(Color.Black)
     ) {
         LiveMeshGradientBackground(
             palette = palette,
