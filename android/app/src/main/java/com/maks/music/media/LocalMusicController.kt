@@ -2,10 +2,12 @@ package com.maks.music.media
 
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -115,6 +117,13 @@ class LocalMusicController(
         }
     }
 
+    private fun ensurePlaybackServiceStarted() {
+        runCatching {
+            val intent = Intent(context, MaksPlaybackService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+        }
+    }
+
     @OptIn(UnstableApi::class)
     fun bindPlayer(exoPlayer: ExoPlayer) {
         player = exoPlayer
@@ -221,10 +230,8 @@ class LocalMusicController(
         _uiState.update { it.copy(crossfadeSec = clamped) }
     }
 
-    fun playWave(languageFilter: String? = null): Boolean {
-        val updated = currentWaveSettings.copy(languageFilter = languageFilter)
-        return playWave(updated)
-    }
+    fun playWave(languageFilter: String? = null): Boolean =
+        playWave(WaveSettings(languageFilter = languageFilter))
 
     fun playWave(settings: WaveSettings): Boolean {
         currentWaveSettings = settings
@@ -434,6 +441,7 @@ class LocalMusicController(
             p.play()
         } else {
             pendingPlayWhenBound = true
+            ensurePlaybackServiceStarted()
         }
     }
 
@@ -648,6 +656,7 @@ class LocalMusicController(
         val p = player
         if (p == null) {
             pendingPlayWhenBound = true
+            ensurePlaybackServiceStarted()
             val initialLiked = track.id in _uiState.value.likedTrackIds
             _uiState.update {
                 it.copy(
