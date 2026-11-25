@@ -26,6 +26,10 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     val micLevel: StateFlow<Float> = app.voiceEngine.micLevel
     val isTtsSpeaking: StateFlow<Boolean> = app.ttsManager.isSpeaking
     val lastEmotion: StateFlow<String> = app.lastEmotion
+    // ── VISUALIZER / MUSIC ENERGY ──
+    // FFT-энергия по низам (0..1) от LocalMusicController.visualizer.
+    // UI читает и пульсирует аватаром/спектром под бит.
+    val musicEnergy: StateFlow<Float> = app.musicController.musicEnergy
 
     fun refreshLibrary() {
         viewModelScope.launch {

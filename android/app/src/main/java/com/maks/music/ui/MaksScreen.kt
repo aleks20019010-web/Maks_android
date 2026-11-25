@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -100,6 +101,8 @@ private const val YANDEX_WAVE_AGSL = """
     uniform float2 iResolution;
     uniform float iTime;
     uniform float iIntensity;
+    uniform float iEnergy;
+    uniform float2 iFlow;
     uniform float3 c1;
     uniform float3 c2;
     uniform float3 c3;
@@ -111,10 +114,10 @@ private const val YANDEX_WAVE_AGSL = """
 
         float t = iTime * 0.42;
 
-        // Искривление пространства (domain warping) для эффекта жидкого шёлка
-        float2 q = p;
-        q.x += 0.34 * sin(q.y * 3.1 + t * 1.1) + 0.16 * cos(q.x * 2.4 - t * 0.7);
-        q.y += 0.32 * cos(q.x * 2.9 - t * 0.9) + 0.14 * sin(q.y * 2.7 + t * 0.8);
+        // Искривление пространства (domain warping) с плавным течением по вектору iFlow
+        float2 q = p + iFlow * 0.55;
+        q.x += (0.32 + iEnergy * 0.14) * sin(q.y * 3.1 + t * 1.1) + 0.16 * cos(q.x * 2.4 - t * 0.7);
+        q.y += (0.30 + iEnergy * 0.14) * cos(q.x * 2.9 - t * 0.9) + 0.14 * sin(q.y * 2.7 + t * 0.8);
 
         float2 r = q;
         r.x += 0.24 * sin(q.y * 4.4 - t * 1.3 + 1.2);
@@ -126,16 +129,16 @@ private const val YANDEX_WAVE_AGSL = """
         float3 baseCol = mix(c1, c2, m1);
         baseCol = mix(baseCol, c3, m2 * 0.55);
 
-        // Тонкие светящиеся «жилки» / ленты каустики
+        // Тонкие светящиеся «жилки» / ленты каустики, мягко усиливающиеся на припеве
         float w1 = abs(sin(r.x * 3.4 + r.y * 2.6 + t * 0.9));
         float w2 = abs(sin(r.x * 2.3 - r.y * 3.7 - t * 1.1 + 1.7));
         float ridge1 = pow(clamp(1.0 - w1, 0.0, 1.0), 6.5);
         float ridge2 = pow(clamp(1.0 - w2, 0.0, 1.0), 7.5);
-        float veins = (ridge1 * 0.65 + ridge2 * 0.45);
+        float veins = (ridge1 * 0.65 + ridge2 * 0.45) * (0.85 + iEnergy * 0.45);
 
         // Мягкие лучи света от центра обложки
         float angle = atan(p.y, p.x);
-        float rays = pow(0.5 + 0.5 * sin(angle * 5.0 + t * 0.6), 4.0) * 0.20;
+        float rays = pow(0.5 + 0.5 * sin(angle * 5.0 + t * 0.6), 4.0) * (0.18 + iEnergy * 0.10);
 
         // Вертикальная маска: сочный свет сверху и резкий уход в чистый чёрный ниже середины
         float topGlow = smoothstep(0.76, 0.04, uv.y);
@@ -208,6 +211,7 @@ private fun extractAmbientPalette(coverArt: Bitmap?, modeLabel: String): Ambient
 private fun LiveMeshGradientBackground(
     palette: AmbientPalette,
     isPlaying: Boolean,
+    musicEnergy: Float,
     modifier: Modifier = Modifier,
 ) {
     val c1 by animateColorAsState(palette.primary, tween(1100), label = "mesh_c1")
@@ -218,20 +222,33 @@ private fun LiveMeshGradientBackground(
         animationSpec = tween(800),
         label = "mesh_intensity",
     )
-    val speed by animateFloatAsState(
-        targetValue = if (isPlaying) 1.0f else 0.25f,
-        animationSpec = tween(600),
-        label = "mesh_speed",
-    )
 
     var timeSec by remember { mutableFloatStateOf(0f) }
+    var smoothEnergy by remember { mutableFloatStateOf(0f) }
+    var driftAngle by remember { mutableFloatStateOf(0f) }
+    var flowX by remember { mutableFloatStateOf(0f) }
+    var flowY by remember { mutableFloatStateOf(0f) }
+
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
+    val latestEnergy by rememberUpdatedState(if (isPlaying) musicEnergy.coerceIn(0f, 1f) else 0f)
+
     LaunchedEffect(Unit) {
         var lastNanos = 0L
         while (true) {
             withFrameNanos { frameNanos ->
                 if (lastNanos != 0L) {
-                    val dt = ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.1f)
-                    timeSec += dt * speed
+                    val dt = ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+
+                    // Двойная инерция: плавный вдох и ещё более плавный выдох (без рывков)
+                    val k = if (latestEnergy > smoothEnergy) 4.0f else 1.6f
+                    smoothEnergy += (latestEnergy - smoothEnergy) * (dt * k).coerceAtMost(1f)
+
+                    // Время и направление только интегрируются
+                    val flowSpeed = if (latestIsPlaying) (0.45f + smoothEnergy * 1.35f) else 0.15f
+                    timeSec += dt * flowSpeed
+                    driftAngle += dt * (0.14f + smoothEnergy * 0.55f)
+                    flowX += cos(driftAngle) * dt * (0.12f + smoothEnergy * 0.42f)
+                    flowY += sin(driftAngle) * dt * (0.12f + smoothEnergy * 0.42f)
                 }
                 lastNanos = frameNanos
             }
@@ -245,6 +262,8 @@ private fun LiveMeshGradientBackground(
             shader.setFloatUniform("iResolution", size.width, size.height)
             shader.setFloatUniform("iTime", timeSec)
             shader.setFloatUniform("iIntensity", intensity)
+            shader.setFloatUniform("iEnergy", smoothEnergy)
+            shader.setFloatUniform("iFlow", flowX, flowY)
             shader.setFloatUniform("c1", c1.red, c1.green, c1.blue)
             shader.setFloatUniform("c2", c2.red, c2.green, c2.blue)
             shader.setFloatUniform("c3", c3.red, c3.green, c3.blue)
@@ -258,11 +277,12 @@ private fun LiveMeshGradientBackground(
             drawRect(Color.Black)
 
             val phase = timeSec * 0.4f
-            val p1 = Offset(w * (0.50f + 0.24f * cos(phase)), h * (0.22f + 0.10f * sin(phase * 1.2f)))
-            val r1 = size.maxDimension * 0.58f
+            val boost = 1f + smoothEnergy * 0.18f
+            val p1 = Offset(w * (0.50f + 0.24f * cos(phase + flowX * 0.3f)), h * (0.22f + 0.10f * sin(phase * 1.2f)))
+            val r1 = size.maxDimension * 0.58f * boost
             drawCircle(
                 brush = Brush.radialGradient(
-                    0.0f to c1.copy(alpha = 0.72f * intensity),
+                    0.0f to c1.copy(alpha = (0.72f * intensity).coerceAtMost(1f)),
                     0.50f to c1.copy(alpha = 0.28f * intensity),
                     1.0f to Color.Transparent,
                     center = p1,
@@ -273,11 +293,11 @@ private fun LiveMeshGradientBackground(
                 blendMode = BlendMode.Screen,
             )
 
-            val p2 = Offset(w * (0.28f + 0.26f * sin(phase * 0.8f + 1.4f)), h * (0.36f + 0.12f * cos(phase * 0.9f)))
-            val r2 = size.maxDimension * 0.52f
+            val p2 = Offset(w * (0.28f + 0.26f * sin(phase * 0.8f + 1.4f + flowY * 0.3f)), h * (0.36f + 0.12f * cos(phase * 0.9f)))
+            val r2 = size.maxDimension * 0.52f * boost
             drawCircle(
                 brush = Brush.radialGradient(
-                    0.0f to c2.copy(alpha = 0.60f * intensity),
+                    0.0f to c2.copy(alpha = (0.60f * intensity).coerceAtMost(1f)),
                     0.55f to c2.copy(alpha = 0.20f * intensity),
                     1.0f to Color.Transparent,
                     center = p2,
@@ -313,6 +333,7 @@ fun MaksScreen(
     val banner by viewModel.banner.collectAsState()
     val voiceState by viewModel.voiceState.collectAsState()
     val micLevel by viewModel.micLevel.collectAsState()
+    val musicEnergy by viewModel.musicEnergy.collectAsState()
     val ttsSpeaking by viewModel.isTtsSpeaking.collectAsState()
     val emotion by viewModel.lastEmotion.collectAsState()
 
@@ -336,7 +357,7 @@ fun MaksScreen(
     val avatarAudioLevel = when {
         ttsSpeaking -> 0.72f
         voiceState == VoiceEngineState.LISTENING_COMMAND -> micLevel
-        player.isPlaying -> 0.42f
+        player.isPlaying -> if (musicEnergy > 0.02f) musicEnergy else 0.42f
         else -> 0.08f
     }
 
@@ -351,6 +372,7 @@ fun MaksScreen(
         LiveMeshGradientBackground(
             palette = palette,
             isPlaying = player.isPlaying || ttsSpeaking,
+            musicEnergy = musicEnergy,
             modifier = Modifier.fillMaxSize(),
         )
 

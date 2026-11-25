@@ -78,6 +78,12 @@ class LocalMusicController(
     @Volatile
     private var crossfadeOutTriggeredForTrackId: String? = null
 
+    // ── VISUALIZER / MUSIC ENERGY ──
+    // audioSessionId от ExoPlayer, Visualizer даёт FFT-энергию по низам.
+    // musicEnergy — 0..1, читается UI для аватара/пульсации.
+    private var visualizer: android.media.audiofx.Visualizer? = null
+    val musicEnergy = MutableStateFlow(0f)
+
     val equalizer = EqualizerController()
     val waveEngine = SmartWaveEngine(memoryDb)
     val ducking = DuckingController(scope) { vol ->
@@ -114,6 +120,45 @@ class LocalMusicController(
         player = exoPlayer
         exoPlayer.addListener(playerListener)
         equalizer.attachToAudioSession(exoPlayer.audioSessionId)
+
+        // ── VISUALIZER: FFT-энергия по низам для аватара ──
+        runCatching {
+            visualizer?.release()
+            visualizer = android.media.audiofx.Visualizer(exoPlayer.audioSessionId).apply {
+                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[0] // 128 байт — минимум нагрузки
+                setDataCaptureListener(
+                    object : android.media.audiofx.Visualizer.OnDataCaptureListener {
+                        override fun onWaveFormDataCapture(
+                            v: android.media.audiofx.Visualizer?,
+                            waveform: ByteArray?,
+                            rate: Int,
+                        ) = Unit
+
+                        override fun onFftDataCapture(
+                            v: android.media.audiofx.Visualizer?,
+                            fft: ByteArray?,
+                            rate: Int,
+                        ) {
+                            if (fft == null || fft.size < 16) return
+                            // Берём только низкие и нижне-средние частоты (бас + ритм-секция)
+                            var sum = 0f
+                            for (i in 2 until 14 step 2) {
+                                val re = fft[i].toFloat()
+                                val im = fft[i + 1].toFloat()
+                                sum += kotlin.math.hypot(re, im)
+                            }
+                            val normalized = (sum / 420f).coerceIn(0f, 1f)
+                            musicEnergy.value = normalized
+                        }
+                    },
+                    android.media.audiofx.Visualizer.getMaxCaptureRate() / 2,
+                    false,
+                    true,
+                )
+                enabled = true
+            }
+        }
+
         startProgressTicker()
         if (pendingPlayWhenBound && currentTrack() != null) {
             pendingPlayWhenBound = false
@@ -125,6 +170,8 @@ class LocalMusicController(
         progressJob?.cancel()
         player?.removeListener(playerListener)
         equalizer.release()
+        runCatching { visualizer?.release() }
+        visualizer = null
         player = null
     }
 
