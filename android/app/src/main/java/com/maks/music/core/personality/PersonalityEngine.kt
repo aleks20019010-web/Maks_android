@@ -130,29 +130,39 @@ class PersonalityEngine(
         val rule = composerRules[effectiveSet]
         val allowFraming = !isNight && selfState.energy >= 0.35
 
-        val parts = mutableListOf<String>()
-        var coreChosen: PhraseEntry? = null
+        // 1. Сначала выбираем Core (основную фразу), чтобы проверять opening/closing на дубли
+        val coreSetName = rule?.core ?: effectiveSet
+        val coreChosen = pickFromSet(coreSetName, targetStyle, isNight)
+        val coreText = coreChosen?.text ?: fallbackText ?: DEFAULT_FALLBACKS[phraseSet] ?: ""
+        val filledCore = substitute(coreText, params)
+        val usedWords = extractNormalizedWords(filledCore).toMutableSet()
 
-        // 1. Opening (например, «Сию минуту», «Один момент»)
+        val parts = mutableListOf<String>()
+
+        // 2. Opening (только если не пересекается по словам с core)
         if (allowFraming && rule?.opening != null && random.nextFloat() < 0.70f) {
             pickFromSet(rule.opening, targetStyle, isNight)?.let { entry ->
-                parts += substitute(entry.text, params)
+                val filled = substitute(entry.text, params)
+                val words = extractNormalizedWords(filled)
+                if (filled.isNotBlank() && words.none { it in usedWords }) {
+                    parts += filled
+                    usedWords += words
+                }
             }
         }
 
-        // 2. Core (основная фраза)
-        val coreSetName = rule?.core ?: effectiveSet
-        coreChosen = pickFromSet(coreSetName, targetStyle, isNight)
-        val coreText = coreChosen?.text ?: fallbackText ?: DEFAULT_FALLBACKS[phraseSet] ?: ""
-        val filledCore = substitute(coreText, params)
         if (filledCore.isNotBlank()) {
             parts += filledCore
         }
 
-        // 3. Closing (например, «Поехали», «Наслаждайтесь»)
+        // 3. Closing (только если не пересекается по словам с opening/core)
         if (allowFraming && rule?.closing != null && random.nextFloat() < 0.65f) {
             pickFromSet(rule.closing, targetStyle, isNight)?.let { entry ->
-                parts += substitute(entry.text, params)
+                val filled = substitute(entry.text, params)
+                val words = extractNormalizedWords(filled)
+                if (filled.isNotBlank() && words.none { it in usedWords }) {
+                    parts += filled
+                }
             }
         }
 
@@ -241,6 +251,14 @@ class PersonalityEngine(
         return UNFILLED_PLACEHOLDER.replace(result, "").trim()
     }
 
+    private fun extractNormalizedWords(raw: String): Set<String> {
+        val noSil = SIL_TAG_REGEX.replace(raw, " ").replace("+", "").lowercase()
+        return WORD_REGEX.findAll(noSil)
+            .map { it.value }
+            .filter { it.length >= 3 }
+            .toSet()
+    }
+
     private fun parseSpeechRate(rateStr: String?, isNight: Boolean): Float {
         val base = if (isNight) 0.92f else 1.02f
         if (rateStr.isNullOrBlank()) return base
@@ -258,6 +276,8 @@ class PersonalityEngine(
     companion object {
         private const val RECENT_LIMIT = 8
         private val UNFILLED_PLACEHOLDER = Regex("""\{[a-zA-Z0-9_]+\}""")
+        private val SIL_TAG_REGEX = Regex("""sil<\[[^\]]*]>""")
+        private val WORD_REGEX = Regex("""[а-яёa-z0-9]+""")
 
         private val DEFAULT_FALLBACKS = mapOf(
             "PLAY_WAVE" to "Включаю вашу волну",

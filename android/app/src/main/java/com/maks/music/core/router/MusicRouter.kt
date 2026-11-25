@@ -8,6 +8,7 @@ import com.maks.music.core.nlu.VolumeParser
 import com.maks.music.core.personality.MaksReply
 import com.maks.music.core.personality.PersonalityEngine
 import com.maks.music.media.LocalMusicController
+import kotlin.random.Random
 
 class MusicRouter(
     private val pipeline: NluPipeline,
@@ -17,6 +18,8 @@ class MusicRouter(
     private val music: LocalMusicController,
     private val onReply: (userText: String?, reply: MaksReply) -> Unit,
 ) {
+    private var nextCommandsUntilRemark: Int = Random.nextInt(5, 11)
+
     init {
         music.onAppraisalTriggered = { decision ->
             if (decision.shouldReact && decision.artistDisplay.isNotBlank()) {
@@ -173,7 +176,13 @@ class MusicRouter(
 
             "next" -> {
                 music.next(isUserSkip = true)
-                if (silentControls) null else personality.respond("NEXT_TRACK")
+                nextCommandsUntilRemark--
+                if (nextCommandsUntilRemark <= 0) {
+                    nextCommandsUntilRemark = Random.nextInt(5, 11)
+                    personality.respond("NEXT_TRACK")
+                } else {
+                    null
+                }
             }
 
             "prev" -> {
