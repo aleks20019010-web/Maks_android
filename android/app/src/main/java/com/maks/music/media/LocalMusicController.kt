@@ -656,6 +656,16 @@ class LocalMusicController(
 
     fun setStereoBalance(balance: Float) {
         equalizer.setStereoBalance(balance)
+        runCatching {
+            val svcField = this.javaClass.declaredFields.firstOrNull {
+                it.type.name.contains("MaksPlaybackService") || it.name.contains("service", ignoreCase = true)
+            }
+            svcField?.isAccessible = true
+            val svc = svcField?.get(this)
+            if (svc != null) {
+                svc.javaClass.getMethod("setStereoBalance", Float::class.javaPrimitiveType).invoke(svc, equalizer.stereoBalance)
+            }
+        }
         _uiState.update { it.copy(stereoBalance = equalizer.stereoBalance) }
     }
 

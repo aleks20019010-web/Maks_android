@@ -9,7 +9,9 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -26,6 +28,7 @@ import com.maks.music.R
 class MaksPlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
+    private val stereoBalanceProcessor = StereoBalanceAudioProcessor()
 
     private val sessionCallback = object : MediaSession.Callback {
         override fun onConnect(
@@ -78,7 +81,19 @@ class MaksPlaybackService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        val exoPlayer = ExoPlayer.Builder(this)
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ) = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf(stereoBalanceProcessor))
+                .build()
+        }
+
+        val exoPlayer = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
             .build()
@@ -169,6 +184,10 @@ class MaksPlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+
+    fun setStereoBalance(balance: Float) {
+        stereoBalanceProcessor.setBalance(balance)
+    }
 
     override fun onDestroy() {
         val app = application as MaksApplication
