@@ -126,6 +126,9 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
 
+    // Offline Russian neural TTS (Sherpa-ONNX + Piper Ruslan)
+    implementation(files("libs/sherpa-onnx-2.0.3.aar"))
+
     // Unit tests (core NLU, PersonalityCore, Appraisal, Phonetics run directly on JVM)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

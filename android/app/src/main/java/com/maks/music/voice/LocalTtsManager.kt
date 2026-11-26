@@ -2,22 +2,32 @@ package com.maks.music.voice
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
+import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.maks.music.core.SpeechTextCleaner
 import com.maks.music.core.personality.MaksReply
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 100% локальный синтез речи на встроенном Android TextToSpeech (ru-RU).
- * Произносит ответ цельной фразой с естественной пунктуацией, чтобы Android TTS
- * не обрывал интонацию на каждом sil<[ms]>, и гарантированно приглушает музыку (duck/restore).
+ * 100% ?????? ???????????? ?????? ???? ?? Sherpa-ONNX (Piper ru_RU-ruslan-medium).
+ * ???????????? ????? sil<[ms]> ?? MaksReply.speechChunks, ????????? ?????????? ?????? (duck/restore)
+ * ? ?????? ?????????? Android TTS ??? ????????? ?????? ?? ????? ????????????? ??????.
  */
 class LocalTtsManager(
     context: Context,
@@ -25,14 +35,27 @@ class LocalTtsManager(
     private val onSpeechDone: () -> Unit,
 ) : TextToSpeech.OnInitListener {
 
+    private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val ttsExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "maks-sherpa-tts").apply { isDaemon = true }
+    }
 
-    private var tts: TextToSpeech? = runCatching {
-        TextToSpeech(context.applicationContext, this)
+    @Volatile
+    private var sherpaTts: OfflineTts? = null
+
+    @Volatile
+    private var activeTrack: AudioTrack? = null
+
+    private val speechToken = AtomicLong(0L)
+
+    // Fallback Android TTS (used only if Sherpa-ONNX is still loading or failed to init)
+    private var fallbackTts: TextToSpeech? = runCatching {
+        TextToSpeech(appContext, this)
     }.getOrNull()
 
     @Volatile
-    private var isReady: Boolean = false
+    private var isFallbackReady: Boolean = false
 
     @Volatile
     private var lastUtteranceId: String? = null
@@ -43,11 +66,39 @@ class LocalTtsManager(
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
+    init {
+        ttsExecutor.execute {
+            initSherpaTts()
+        }
+    }
+
+    private fun initSherpaTts() {
+        try {
+            val modelDir = "vits-piper-ru_RU-ruslan-medium"
+            val vitsConfig = OfflineTtsVitsModelConfig(
+                model = "$modelDir/ru_RU-ruslan-medium.onnx",
+                tokens = "$modelDir/tokens.txt",
+                dataDir = "$modelDir/espeak-ng-data",
+            )
+            val modelConfig = OfflineTtsModelConfig(
+                vits = vitsConfig,
+                numThreads = 2,
+                debug = false,
+                provider = "cpu",
+            )
+            val config = OfflineTtsConfig(model = modelConfig)
+            sherpaTts = OfflineTts(assetManager = appContext.assets, config = config)
+            Log.i(TAG, "Sherpa-ONNX TTS (ruslan) initialized successfully")
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to initialize Sherpa-ONNX TTS, will use Android TTS fallback", e)
+            sherpaTts = null
+        }
+    }
+
     override fun onInit(status: Int) {
         if (status != TextToSpeech.SUCCESS) return
-        val engine = tts ?: return
-        val ru = Locale("ru", "RU")
-        engine.language = ru
+        val engine = fallbackTts ?: return
+        engine.language = Locale("ru", "RU")
         engine.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -80,7 +131,7 @@ class LocalTtsManager(
                 notifySpeechFinished()
             }
         })
-        isReady = true
+        isFallbackReady = true
     }
 
     private fun notifySpeechStarted() {
@@ -104,36 +155,168 @@ class LocalTtsManager(
     }
 
     fun speak(reply: MaksReply) {
-        val engine = tts ?: return
-        if (!isReady) return
+        val chunks = reply.speechChunks.ifEmpty {
+            val clean = reply.displayText.trim()
+            if (clean.isEmpty()) emptyList() else listOf(SpeechTextCleaner.SpeechChunk(clean, 0L))
+        }
+        if (chunks.isEmpty()) return
+
+        val token = speechToken.incrementAndGet()
+        stopActiveAudio()
+
+        val engine = sherpaTts
+        if (engine != null) {
+            val speed = reply.speechRate.coerceIn(0.75f, 1.4f)
+            ttsExecutor.execute {
+                speakWithSherpa(engine, chunks, speed, token)
+            }
+        } else {
+            speakWithFallback(reply)
+        }
+    }
+
+    private fun speakWithSherpa(
+        engine: OfflineTts,
+        chunks: List<SpeechTextCleaner.SpeechChunk>,
+        speed: Float,
+        token: Long,
+    ) {
+        if (speechToken.get() != token) return
+        notifySpeechStarted()
+
+        var track: AudioTrack? = null
+        try {
+            for (chunk in chunks) {
+                if (speechToken.get() != token) break
+                val text = chunk.text.trim()
+                if (text.isEmpty()) continue
+
+                val audio = engine.generate(text = text, sid = 0, speed = speed)
+                if (speechToken.get() != token) break
+
+                val samples = audio.samples
+                val sampleRate = audio.sampleRate
+                if (samples.isEmpty() || sampleRate <= 0) continue
+
+                if (track == null) {
+                    val minBuf = AudioTrack.getMinBufferSize(
+                        sampleRate,
+                        AudioFormat.CHANNEL_OUT_MONO,
+                        AudioFormat.ENCODING_PCM_FLOAT
+                    ).coerceAtLeast(4096)
+
+                    track = AudioTrack.Builder()
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(minBuf * 2)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build()
+
+                    activeTrack = track
+                    track.play()
+                }
+
+                writeFloatChunked(track, samples, token)
+
+                if (chunk.pauseAfterMs > 0L && speechToken.get() == token) {
+                    val silenceLen = ((sampleRate.toLong() * chunk.pauseAfterMs) / 1000L).toInt()
+                    if (silenceLen > 0) {
+                        writeFloatChunked(track, FloatArray(silenceLen), token)
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error during Sherpa-ONNX playback", e)
+        } finally {
+            runCatching {
+                track?.stop()
+                track?.release()
+            }
+            if (activeTrack === track) {
+                activeTrack = null
+            }
+            if (speechToken.get() == token) {
+                notifySpeechFinished()
+            }
+        }
+    }
+
+    private fun writeFloatChunked(track: AudioTrack, data: FloatArray, token: Long) {
+        var offset = 0
+        val step = 2048
+        while (offset < data.size && speechToken.get() == token) {
+            val count = minOf(step, data.size - offset)
+            val written = track.write(data, offset, count, AudioTrack.WRITE_BLOCKING)
+            if (written <= 0) break
+            offset += written
+        }
+    }
+
+    private fun speakWithFallback(reply: MaksReply) {
+        val engine = fallbackTts ?: return
+        if (!isFallbackReady) return
         val textToSpeak = reply.displayText.trim()
         if (textToSpeak.isEmpty()) return
 
         notifySpeechStarted()
-
         engine.setSpeechRate(reply.speechRate)
         engine.setPitch(reply.speechPitch)
 
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
         }
-
         val uid = "maks_${UUID.randomUUID()}"
         lastUtteranceId = uid
         engine.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, params, uid)
     }
 
+    private fun stopActiveAudio() {
+        runCatching { fallbackTts?.stop() }
+        val track = activeTrack
+        activeTrack = null
+        if (track != null) {
+            runCatching {
+                track.pause()
+                track.flush()
+                track.stop()
+            }
+        }
+    }
+
     fun stop() {
-        tts?.stop()
+        speechToken.incrementAndGet()
+        stopActiveAudio()
         notifySpeechFinished()
     }
 
     fun shutdown() {
-        runCatching {
-            tts?.stop()
-            tts?.shutdown()
+        speechToken.incrementAndGet()
+        stopActiveAudio()
+        ttsExecutor.execute {
+            runCatching { sherpaTts?.release() }
+            sherpaTts = null
         }
-        tts = null
-        isReady = false
+        ttsExecutor.shutdown()
+        runCatching {
+            fallbackTts?.stop()
+            fallbackTts?.shutdown()
+        }
+        fallbackTts = null
+        isFallbackReady = false
+    }
+
+    companion object {
+        private const val TAG = "LocalTtsManager"
     }
 }
