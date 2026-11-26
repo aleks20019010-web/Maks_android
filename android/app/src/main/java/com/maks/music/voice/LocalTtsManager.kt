@@ -76,7 +76,7 @@ class LocalTtsManager(
 
     private fun copyAssetDirIfNeeded(assetSubPath: String): String {
         val targetDir = File(appContext.filesDir, assetSubPath)
-        val marker = File(targetDir, ".ready")
+        val marker = File(targetDir, ".ready_full")
         if (marker.exists()) {
             return targetDir.absolutePath
         }
@@ -105,14 +105,14 @@ class LocalTtsManager(
 
     private fun initSherpaTts() {
         try {
-            val modelDir = "vits-piper-ru_RU-ruslan-medium"
-            val espeakDataPath = copyAssetDirIfNeeded("$modelDir/espeak-ng-data")
-            Log.i(TAG, "espeak-ng-data ready at: $espeakDataPath")
+            val modelDirName = "vits-piper-ru_RU-ruslan-medium"
+            val modelDirPath = copyAssetDirIfNeeded(modelDirName)
+            Log.i(TAG, "Sherpa-ONNX model dir ready at: $modelDirPath")
 
             val vitsConfig = OfflineTtsVitsModelConfig(
-                model = "$modelDir/ru_RU-ruslan-medium.onnx",
-                tokens = "$modelDir/tokens.txt",
-                dataDir = espeakDataPath,
+                model = "$modelDirPath/ru_RU-ruslan-medium.onnx",
+                tokens = "$modelDirPath/tokens.txt",
+                dataDir = "$modelDirPath/espeak-ng-data",
             )
             val modelConfig = OfflineTtsModelConfig(
                 vits = vitsConfig,
@@ -121,8 +121,8 @@ class LocalTtsManager(
                 provider = "cpu",
             )
             val config = OfflineTtsConfig(model = modelConfig)
-            sherpaTts = OfflineTts(assetManager = appContext.assets, config = config)
-            Log.i(TAG, "Sherpa-ONNX TTS (ruslan) initialized successfully")
+            sherpaTts = OfflineTts(assetManager = null, config = config)
+            Log.i(TAG, "Sherpa-ONNX TTS (ruslan) initialized successfully from disk")
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to initialize Sherpa-ONNX TTS, will use Android TTS fallback", e)
             sherpaTts = null
