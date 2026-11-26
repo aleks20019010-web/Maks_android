@@ -13,6 +13,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -310,15 +311,15 @@ class YandexMusicClient(context: Context) {
         val coverUri = obj["coverUri"]?.jsonPrimitive?.content.orEmpty()
         val rawGenre = buildList {
             (obj["genres"] as? JsonArray)?.forEach { el ->
-                if (el is JsonPrimitive) add(el.content)
-                else (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.let { add(it) }
+                (el as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull?.let { add(it) }
+                    ?: runCatching { el.jsonPrimitive.contentOrNull }.getOrNull()?.let { add(it) }
             }
-            obj["genre"]?.jsonPrimitive?.content?.let { add(it) }
+            obj["genre"]?.jsonPrimitive?.contentOrNull?.let { add(it) }
             val firstAlbum = (obj["albums"] as? JsonArray)?.firstOrNull() as? JsonObject
-            firstAlbum?.get("genre")?.jsonPrimitive?.content?.let { add(it) }
+            firstAlbum?.get("genre")?.jsonPrimitive?.contentOrNull?.let { add(it) }
             (firstAlbum?.get("genres") as? JsonArray)?.forEach { el ->
-                if (el is JsonPrimitive) add(el.content)
-                else (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.let { add(it) }
+                (el as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull?.let { add(it) }
+                    ?: runCatching { el.jsonPrimitive.contentOrNull }.getOrNull()?.let { add(it) }
             }
         }.firstOrNull { it.isNotBlank() }?.trim()?.lowercase().orEmpty()
 

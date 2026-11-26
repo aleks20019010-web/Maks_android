@@ -23,6 +23,7 @@ data class WaveSettings(
     val character: WaveCharacter = WaveCharacter.ALL,
     val mood: WaveMood = WaveMood.ANY,
     val languageFilter: String? = null, // null = любой, "russian", "not-russian"
+    val genreFilter: String? = null,
 ) {
     fun displayLabel(): String {
         val parts = mutableListOf<String>()
@@ -120,6 +121,30 @@ class SmartWaveEngine(
                 hints.any { h -> t.genre.contains(h, ignoreCase = true) || t.album.contains(h, ignoreCase = true) }
             }
             if (moodFiltered.size >= 5) pool = moodFiltered
+        }
+
+        // 2.5. Жанр (если задан)
+        val targetGenre = settings.genreFilter?.trim()?.lowercase()?.removePrefix("genre:")
+        if (!targetGenre.isNullOrBlank()) {
+            val aliases = when (targetGenre) {
+                "electronic" -> listOf("electronic", "electro", "synth", "dnb", "drum", "house", "techno", "trance", "dance")
+                "rap", "hip-hop" -> listOf("rap", "hip-hop", "hip hop", "trap", "рэп", "хип-хоп")
+                "jazz", "blues" -> listOf("jazz", "blues", "soul", "funk", "джаз", "блюз")
+                "classical", "ambient" -> listOf("classical", "ambient", "neoclassical", "soundtrack", "классика", "эмбиент")
+                "rock" -> listOf("rock", "punk", "grunge", "alt", "рок", "панк")
+                "metal" -> listOf("metal", "heavy", "thrash", "core", "метал")
+                "indie" -> listOf("indie", "alternative", "folk", "инди")
+                "pop" -> listOf("pop", "поп")
+                else -> listOf(targetGenre)
+            }
+            val genreFiltered = pool.filter { t ->
+                val g = t.genre.lowercase()
+                val a = t.album.lowercase()
+                aliases.any { hint -> g.contains(hint) || a.contains(hint) }
+            }
+            if (genreFiltered.isNotEmpty()) {
+                pool = if (genreFiltered.size >= 5) genreFiltered else (genreFiltered + pool).distinctBy { it.id }
+            }
         }
 
         // 3. Характер (Любимое / Давно не слушал / Новое)
