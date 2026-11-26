@@ -586,7 +586,8 @@ internal fun MaksSettingsScreen(
                     } else {
                         runCatching {
                             val parsed = android.net.Uri.parse(currentDirUri)
-                            val docName = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, parsed)?.name
+                            val treeId = runCatching { android.provider.DocumentsContract.getTreeDocumentId(parsed) }.getOrNull().orEmpty()
+                            val docName = treeId.substringAfterLast(':', treeId).substringAfterLast('/').takeIf { it.isNotBlank() }
                             if (!docName.isNullOrBlank()) "$docName ($currentDirUri)" else currentDirUri
                         }.getOrDefault(currentDirUri)
                     }
