@@ -81,13 +81,6 @@ fun EqStudioTab(
     val eqEnabled = player.eqEnabled
     val bands = player.eqBandsDb
 
-
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) onImportPreferencesUri(uri)
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -417,43 +410,7 @@ fun EqStudioTab(
         }
 
         // 8. Экспорт / Импорт лайков и дизлайков (JSON)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(MaksColors.SpaceSurface)
-                .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(20.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                    Spacer(Modifier.width(6.dp))
-                    Text("Экспорт", color = MaksColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
-
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaksColors.SpaceSurfaceElevated)
-                        .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(12.dp))
-                        .clickable { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Download,
-                        contentDescription = null,
-                        tint = MaksColors.LavenderGlow,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Импорт", color = MaksColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
-            }
-        }
-
+        
         Spacer(Modifier.height(6.dp))
     }
 }
