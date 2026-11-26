@@ -26,6 +26,11 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import com.maks.music.media.YandexMusicClient
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,6 +71,11 @@ internal fun MaksCoreTab(
     onSubmitCommand: (String) -> Unit,
 ) {
     var commandText by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val yandexPrefsClient = remember(context) { YandexMusicClient(context) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var tokenInput by remember { mutableStateOf(yandexPrefsClient.getToken()) }
+    var isYandexConnected by remember { mutableStateOf(yandexPrefsClient.isConfigured()) }
 
     Column(
         modifier = Modifier
@@ -89,6 +99,20 @@ internal fun MaksCoreTab(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+                IconButton(
+                    onClick = {
+                        tokenInput = yandexPrefsClient.getToken()
+                        showSettingsDialog = true
+                    },
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Settings,
+                        contentDescription = "????????? ?????? ??????",
+                        tint = if (isYandexConnected) MaksColors.CyanAccent else MaksColors.TextMuted,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
                 IconButton(onClick = onToggleAlwaysListening, modifier = Modifier.size(38.dp)) {
                     Icon(
                         imageVector = if (alwaysListening) Icons.Rounded.Mic else Icons.Rounded.MicOff,
@@ -282,5 +306,68 @@ internal fun MaksCoreTab(
                 )
             }
         }
+    }
+
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            containerColor = MaksColors.SpaceSurfaceElevated,
+            titleContentColor = MaksColors.TextPrimary,
+            textContentColor = MaksColors.TextSecondary,
+            title = {
+                Text(
+                    text = "?????? ??????",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = if (isYandexConnected) {
+                            "????? ????? ? ????? ? ??????-????? ??????? (prefetch 5 ??????)."
+                        } else {
+                            "???????? OAuth-????? ?????? ??????. ??? ???? ???? ????????????? ?????? ????????? ??????????."
+                        },
+                        fontSize = 13.sp,
+                        color = MaksColors.TextSecondary,
+                    )
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        placeholder = {
+                            Text("y0_AgAAAA...", color = MaksColors.TextMuted, fontSize = 13.sp)
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaksColors.SpaceSurface,
+                            unfocusedContainerColor = MaksColors.SpaceSurface,
+                            focusedBorderColor = MaksColors.CyanAccent,
+                            unfocusedBorderColor = MaksColors.SpaceBorder,
+                            focusedTextColor = MaksColors.TextPrimary,
+                            unfocusedTextColor = MaksColors.TextPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        yandexPrefsClient.setToken(tokenInput)
+                        isYandexConnected = yandexPrefsClient.isConfigured()
+                        showSettingsDialog = false
+                    },
+                ) {
+                    Text("?????????", color = MaksColors.CyanAccent, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text("??????", color = MaksColors.TextMuted)
+                }
+            },
+        )
     }
 }

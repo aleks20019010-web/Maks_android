@@ -230,20 +230,64 @@ class LocalMusicController(
         _uiState.update { it.copy(crossfadeSec = clamped) }
     }
 
+    val yandexClient = YandexMusicClient(context)
+    private val yandexBridge = YandexQueueBridge(yandexClient)
+    @Volatile private var isWaveMode: Boolean = false
+
+    fun setYandexToken(token: String) = yandexClient.setToken(token)
+    fun getYandexToken(): String = yandexClient.getToken()
+    fun isYandexConfigured(): Boolean = yandexClient.isConfigured()
+
+    private fun triggerWavePrefetchIfNeeded() {
+        if (!isWaveMode) return
+        yandexBridge.ensureWavePrefetch(
+            scope = scope,
+            stationId = "user:onyourwave",
+            currentQueue = { queue },
+            currentIndex = { currentIndex },
+            localTracksProvider = { scanner.allTracks() },
+            blacklistedIdsProvider = { memoryDb.getBlacklistedTrackIds() },
+            onInsertNextTrack = { insertAt, track ->
+                scope.launch(Dispatchers.Main) {
+                    if (!isWaveMode) return@launch
+                    val mutable = queue.toMutableList()
+                    val safeIdx = insertAt.coerceIn(0, mutable.size)
+                    // ?? ????????? ????????, ???? ???? ???? ??? ? ????????? ???????
+                    if (mutable.any { it.id == track.id }) return@launch
+                    mutable.add(safeIdx, track)
+                    queue = mutable
+                    _uiState.update { it.copy(queue = queue) }
+                }
+            },
+        )
+    }
+
     fun playWave(languageFilter: String? = null): Boolean =
         playWave(WaveSettings(languageFilter = languageFilter))
 
     fun playWave(settings: WaveSettings): Boolean {
         currentWaveSettings = settings
+        isWaveMode = true
+        yandexBridge.resetWaveSession()
         val list = waveEngine.buildWaveQueue(scanner.allTracks(), settings)
         if (list.isEmpty()) return false
         _uiState.update { it.copy(waveSettings = settings) }
         startQueue(list, settings.displayLabel())
+        triggerWavePrefetchIfNeeded()
         return true
     }
 
     fun playArtist(artist: String): Boolean {
-        val list = scanner.findByArtist(artist, memoryDb.getBlacklistedTrackIds())
+        isWaveMode = false
+        yandexBridge.resetWaveSession()
+        var list = scanner.findByArtist(artist, memoryDb.getBlacklistedTrackIds())
+        if (list.isEmpty() && yandexClient.isConfigured() && !yandexClient.isTemporarilyDown()) {
+            list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                    yandexBridge.searchAndDownloadTracks(artist, scanner.allTracks(), limit = 5)
+                }.orEmpty()
+            }
+        }
         if (list.isEmpty()) return false
         startQueue(list, artist)
         return true
@@ -265,7 +309,16 @@ class LocalMusicController(
     }
 
     fun playSearch(query: String): LocalTrack? {
-        val list = scanner.searchLocal(query, memoryDb.getBlacklistedTrackIds())
+        isWaveMode = false
+        yandexBridge.resetWaveSession()
+        var list = scanner.searchLocal(query, memoryDb.getBlacklistedTrackIds())
+        if (list.isEmpty() && yandexClient.isConfigured() && !yandexClient.isTemporarilyDown()) {
+            list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                    yandexBridge.searchAndDownloadTracks(query, scanner.allTracks(), limit = 5)
+                }.orEmpty()
+            }
+        }
         if (list.isEmpty()) return null
         startQueue(list, "Поиск · $query")
         return list.first()
@@ -690,6 +743,7 @@ class LocalMusicController(
         }
 
         waveEngine.markPlayed(track.id)
+        triggerWavePrefetchIfNeeded()
 
         val crossfadeMs = (_uiState.value.crossfadeSec * 1000f).toLong()
         if (useFadeIn && crossfadeMs > 0L) {
