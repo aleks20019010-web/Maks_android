@@ -157,6 +157,9 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     }
     }
 
+    fun setYandexDownloadDirUri(uri: String) {
+        app.settingsStore.setYandexDownloadDirUri(uri)
+    }
     fun setAgcEnabled(enabled: Boolean) {
         app.settingsStore.setAgcEnabled(enabled)
         val gain = app.settingsStore.state.value.micGainMultiplier
@@ -181,5 +184,4 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     fun setYandexDownloadDirUri(uri: String) {
         app.settingsStore.setYandexDownloadDirUri(uri)
     }
-
 }

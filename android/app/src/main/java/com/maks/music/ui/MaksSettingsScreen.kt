@@ -685,7 +685,7 @@ internal fun MaksSettingsScreen(
 
                 SettingsToggleRow(
                     title = "Игнорировать файлы короче 30 сек",
-                    subtitle = "Отсеивает голосовые сообщения и рингтоны (иначе 15 сек)",
+                    subtitle = "Короче 30 сек не попадают; при выключении — короче 15 сек",
                     checked = settings.ignoreShortTracksSec >= 30,
                     onCheckedChange = { checked ->
                         viewModel.setIgnoreShortTracksSec(if (checked) 30 else 15)
@@ -851,16 +851,33 @@ internal fun MaksSettingsScreen(
                     }
                     FilledTonalButton(
                         onClick = {
-                            runCatching {
-                                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                    Intent(
-                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        Uri.parse("package:${context.packageName}")
-                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                } else {
-                                    Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val intents = buildList {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                    add(
+                                        Intent(
+                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:${context.packageName}")
+                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                    add(
+                                        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
                                 }
-                                context.startActivity(intent)
+                                add(
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                                add(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                            for (intent in intents) {
+                                val started = runCatching {
+                                    context.startActivity(intent)
+                                    true
+                                }.getOrDefault(false)
+                                if (started) break
                             }
                         },
                         colors = ButtonDefaults.filledTonalButtonColors(
