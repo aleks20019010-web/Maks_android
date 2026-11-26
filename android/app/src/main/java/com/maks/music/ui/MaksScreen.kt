@@ -405,7 +405,6 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onOpenEq = { activeTab = MainTab.EQ },
-                                onOpenSettings = { showSettingsScreen = true },
                                 onOpenQueue = { activeTab = MainTab.QUEUE },
                                 onSwitchToCore = { playerViewMode = PlayerViewMode.MAKS_CORE },
                                 onPushToTalk = onPushToTalk,
@@ -493,7 +492,6 @@ fun MaksScreen(
                         onPlayQueueIndex = { idx -> viewModel.playQueueIndex(idx) },
                         onRebuildWave = { viewModel.playWave() },
                         onOpenEq = { activeTab = MainTab.EQ },
-                                onOpenSettings = { showSettingsScreen = true },
                     )
                 }
 
