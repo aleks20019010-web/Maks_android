@@ -407,8 +407,8 @@ internal fun MaksSettingsScreen(
                     onCheckedChange = viewModel::setHotwordsEnabled,
                 )
                 SettingsToggleRow(
-                    title = "???????????? ????????? (AGC)",
-                    subtitle = "?????????????? ??????????? ?????? ?? ??????????? ??????",
+                    title = "Автоусиление микрофона (AGC)",
+                    subtitle = "Автоматическая регулировка уровня на аудиосессии записи",
                     checked = runCatching { settings.agcEnabled }.getOrDefault(true),
                     onCheckedChange = { enabled ->
                         val gain = runCatching { settings.micGainMultiplier }.getOrDefault(1.0f)
@@ -424,7 +424,7 @@ internal fun MaksSettingsScreen(
                 ) {
                     val gainVal = runCatching { settings.micGainMultiplier }.getOrDefault(1.0f)
                     Text(
-                        text = "???????? ?????????: ${String.format(java.util.Locale.US, "%.2fx", gainVal)}",
+                        text = "Усиление микрофона: ${String.format(java.util.Locale.US, "%.2fx", gainVal)}",
                         color = MaksColors.TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
