@@ -208,10 +208,11 @@ class YandexMusicClient(context: Context) {
                 return@runCatching null
             }
             if (target.exists()) target.delete()
-            if (!if (tmp.renameTo(target)) exportToSelectedFolder(target)) {
+            if (!tmp.renameTo(target)) {
                 tmp.copyTo(target, overwrite = true)
                 tmp.delete()
             }
+            exportToSelectedFolder(target)
             markOk()
             enforceCacheLimit()
             Log.i(TAG, "Downloaded: ${target.name} (${target.length() / 1024} KB)")
