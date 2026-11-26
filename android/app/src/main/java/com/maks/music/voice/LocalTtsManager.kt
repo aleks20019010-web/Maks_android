@@ -19,6 +19,8 @@ import com.maks.music.core.personality.MaksReply
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -27,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * 100% ?????? ???????????? ?????? ???? ?? Sherpa-ONNX (Piper ru_RU-ruslan-medium).
  * ???????????? ????? sil<[ms]> ?? MaksReply.speechChunks, ????????? ?????????? ?????? (duck/restore)
- * ? ?????? ?????????? Android TTS ??? ????????? ?????? ?? ????? ????????????? ??????.
+ * ? ?????? ?????????? Android TTS ??? ????????? ??????.
  */
 class LocalTtsManager(
     context: Context,
@@ -49,7 +51,7 @@ class LocalTtsManager(
 
     private val speechToken = AtomicLong(0L)
 
-    // Fallback Android TTS (used only if Sherpa-ONNX is still loading or failed to init)
+    // Fallback Android TTS (used while Sherpa-ONNX is loading or if generation fails)
     private var fallbackTts: TextToSpeech? = runCatching {
         TextToSpeech(appContext, this)
     }.getOrNull()
@@ -72,13 +74,45 @@ class LocalTtsManager(
         }
     }
 
+    private fun copyAssetDirIfNeeded(assetSubPath: String): String {
+        val targetDir = File(appContext.filesDir, assetSubPath)
+        val marker = File(targetDir, ".ready")
+        if (marker.exists()) {
+            return targetDir.absolutePath
+        }
+        copyAssetRecursive(assetSubPath, targetDir)
+        marker.writeText("ok")
+        return targetDir.absolutePath
+    }
+
+    private fun copyAssetRecursive(assetPath: String, outFile: File) {
+        val assets = appContext.assets
+        val children = assets.list(assetPath)
+        if (children.isNullOrEmpty()) {
+            outFile.parentFile?.mkdirs()
+            assets.open(assetPath).use { input ->
+                FileOutputStream(outFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } else {
+            outFile.mkdirs()
+            for (child in children) {
+                copyAssetRecursive("$assetPath/$child", File(outFile, child))
+            }
+        }
+    }
+
     private fun initSherpaTts() {
         try {
             val modelDir = "vits-piper-ru_RU-ruslan-medium"
+            val espeakDataPath = copyAssetDirIfNeeded("$modelDir/espeak-ng-data")
+            Log.i(TAG, "espeak-ng-data ready at: $espeakDataPath")
+
             val vitsConfig = OfflineTtsVitsModelConfig(
                 model = "$modelDir/ru_RU-ruslan-medium.onnx",
                 tokens = "$modelDir/tokens.txt",
-                dataDir = "$modelDir/espeak-ng-data",
+                dataDir = espeakDataPath,
             )
             val modelConfig = OfflineTtsModelConfig(
                 vits = vitsConfig,
@@ -168,7 +202,7 @@ class LocalTtsManager(
         if (engine != null) {
             val speed = reply.speechRate.coerceIn(0.75f, 1.4f)
             ttsExecutor.execute {
-                speakWithSherpa(engine, chunks, speed, token)
+                speakWithSherpa(engine, reply, chunks, speed, token)
             }
         } else {
             speakWithFallback(reply)
@@ -177,6 +211,7 @@ class LocalTtsManager(
 
     private fun speakWithSherpa(
         engine: OfflineTts,
+        reply: MaksReply,
         chunks: List<SpeechTextCleaner.SpeechChunk>,
         speed: Float,
         token: Long,
@@ -185,6 +220,7 @@ class LocalTtsManager(
         notifySpeechStarted()
 
         var track: AudioTrack? = null
+        var producedAudio = false
         try {
             for (chunk in chunks) {
                 if (speechToken.get() != token) break
@@ -196,7 +232,10 @@ class LocalTtsManager(
 
                 val samples = audio.samples
                 val sampleRate = audio.sampleRate
-                if (samples.isEmpty() || sampleRate <= 0) continue
+                if (samples.isEmpty() || sampleRate <= 0) {
+                    Log.w(TAG, "Sherpa-ONNX returned empty audio for chunk: $text")
+                    continue
+                }
 
                 if (track == null) {
                     val minBuf = AudioTrack.getMinBufferSize(
@@ -227,6 +266,7 @@ class LocalTtsManager(
                     track.play()
                 }
 
+                producedAudio = true
                 writeFloatChunked(track, samples, token)
 
                 if (chunk.pauseAfterMs > 0L && speechToken.get() == token) {
@@ -246,7 +286,10 @@ class LocalTtsManager(
             if (activeTrack === track) {
                 activeTrack = null
             }
-            if (speechToken.get() == token) {
+            if (!producedAudio && speechToken.get() == token) {
+                Log.w(TAG, "No audio produced by Sherpa-ONNX, falling back to Android TTS")
+                mainHandler.post { speakWithFallback(reply) }
+            } else if (speechToken.get() == token) {
                 notifySpeechFinished()
             }
         }
