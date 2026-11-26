@@ -10,6 +10,7 @@ import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.widget.Toast
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
@@ -123,8 +124,10 @@ class LocalTtsManager(
             val config = OfflineTtsConfig(model = modelConfig)
             sherpaTts = OfflineTts(assetManager = null, config = config)
             Log.i(TAG, "Sherpa-ONNX TTS (ruslan) initialized successfully from disk")
+            mainHandler.post { Toast.makeText(appContext, "Sherpa TTS OK", Toast.LENGTH_SHORT).show() }
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to initialize Sherpa-ONNX TTS, will use Android TTS fallback", e)
+            mainHandler.post { Toast.makeText(appContext, "Sherpa FAIL: ${e.javaClass.simpleName}: ${e.message}", Toast.LENGTH_LONG).show() }
             sherpaTts = null
         }
     }
