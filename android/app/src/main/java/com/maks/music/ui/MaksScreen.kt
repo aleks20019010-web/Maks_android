@@ -459,7 +459,7 @@ fun MaksScreen(
                         player = player,
                         accent = accent,
                         hasAudioPermission = hasAudioPermission,
-                        loadThumbnail = { track -> viewModel.loadTrackThumbnail(track) },
+                        loadThumbnail = viewModel::loadTrackThumbnail,
                         onRequestAudioPermission = onRequestAudioPermission,
                         onPickMusicFolder = onPickMusicFolder,
                         onRefresh = { viewModel.refreshLibrary() },
@@ -489,7 +489,7 @@ fun MaksScreen(
                     MainTab.QUEUE -> QueueTab(
                         player = player,
                         accent = accent,
-                        loadThumbnail = { track -> viewModel.loadTrackThumbnail(track) },
+                        loadThumbnail = viewModel::loadTrackThumbnail,
                         onPlayQueueIndex = { idx -> viewModel.playQueueIndex(idx) },
                         onRebuildWave = { viewModel.playWave() },
                         onOpenEq = { activeTab = MainTab.EQ },
