@@ -405,6 +405,7 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onOpenEq = { activeTab = MainTab.EQ },
+                                onOpenSettings = { showSettingsScreen = true },
                                 onOpenQueue = { activeTab = MainTab.QUEUE },
                                 onSwitchToCore = { playerViewMode = PlayerViewMode.MAKS_CORE },
                                 onPushToTalk = onPushToTalk,
@@ -438,6 +439,7 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onSubmitCommand = { cmd -> viewModel.submitCommand(cmd) },
+                                onOpenSettings = { showSettingsScreen = true },
                             )
                         }
                     }
