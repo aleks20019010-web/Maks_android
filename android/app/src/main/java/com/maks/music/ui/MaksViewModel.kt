@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maks.music.MaksApplication
 import com.maks.music.MaksBanner
+import com.maks.music.core.MaksSettingsState
+import com.maks.music.core.memory.MusicMemoryDb
 import com.maks.music.media.LocalTrack
 import com.maks.music.media.PlayerUiState
 import com.maks.music.media.WaveSettings
@@ -21,6 +23,7 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as MaksApplication
 
     val playerState: StateFlow<PlayerUiState> = app.musicController.uiState
+    val settingsState: StateFlow<MaksSettingsState> = app.settingsStore.state
     val banner: StateFlow<MaksBanner?> = app.banner
     val voiceState: StateFlow<VoiceEngineState> = app.voiceEngine.state
     val micLevel: StateFlow<Float> = app.voiceEngine.micLevel
@@ -109,6 +112,46 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     fun playFromLibrary(tracks: List<LocalTrack>, index: Int, label: String = "Медиатека") =
         app.musicController.playFromLibrary(tracks, index, label)
     fun playQueueIndex(index: Int) = app.musicController.playQueueIndex(index)
+
+
+    fun setYandexToken(token: String) {
+        app.settingsStore.setYandexToken(token)
+        app.musicController.setYandexToken(token)
+    }
+
+    suspend fun testYandexConnection(): Result<String> = app.musicController.yandexClient.testConnection()
+    fun getYandexCacheStats(): Pair<Int, Long> = app.musicController.yandexClient.getCacheStats()
+    fun clearYandexCache(): Int = app.musicController.yandexClient.clearCache()
+    fun isYandexTemporarilyDown(): Boolean = app.musicController.yandexClient.isTemporarilyDown()
+    fun resetYandexCircuitBreaker() = app.musicController.yandexClient.resetCircuitBreaker()
+
+    fun setYandexPrefetchCount(count: Int) = app.settingsStore.setYandexPrefetchCount(count)
+    fun setYandexWifiOnly(enabled: Boolean) = app.settingsStore.setYandexWifiOnly(enabled)
+    fun setYandexCacheLimitMb(limitMb: Int) {
+        app.settingsStore.setYandexCacheLimitMb(limitMb)
+        app.musicController.yandexClient.enforceCacheLimit()
+    }
+    fun setYandexHighQuality(high: Boolean) = app.settingsStore.setYandexHighQuality(high)
+
+    fun setHotwordsEnabled(enabled: Boolean) = app.settingsStore.setHotwordsEnabled(enabled)
+    fun setPauseListeningOnHeadset(enabled: Boolean) = app.settingsStore.setPauseListeningOnHeadset(enabled)
+    fun setSilentControls(enabled: Boolean) = app.settingsStore.setSilentControls(enabled)
+    fun setTtsSpeechRate(rate: Float) = app.settingsStore.setTtsSpeechRate(rate)
+    fun setDuckLevelPercent(percent: Int) = app.settingsStore.setDuckLevelPercent(percent)
+
+    fun setIgnoreShortTracksSec(sec: Int) {
+        app.settingsStore.setIgnoreShortTracksSec(sec)
+        refreshLibrary()
+    }
+
+    fun setDefaultWaveLanguage(lang: String?) = app.settingsStore.setDefaultWaveLanguage(lang)
+    fun setResumeOnBluetooth(enabled: Boolean) = app.settingsStore.setResumeOnBluetooth(enabled)
+
+    fun getBlacklistedEntries(): List<MusicMemoryDb.BlacklistedEntry> = app.memoryDb.getBlacklistedEntries()
+    fun unblacklistEntry(entry: MusicMemoryDb.BlacklistedEntry) {
+        if (entry.isArtist) app.memoryDb.unblacklistArtist(entry.id)
+        else app.memoryDb.unblacklistTrack(entry.id)
+    }
 
     fun triggerPushToTalk() = app.voiceEngine.triggerPushToTalk()
 }

@@ -1,6 +1,8 @@
 package com.maks.music.media
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,6 +32,7 @@ class YandexMusicClient(context: Context) {
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val settingsPrefs = appContext.getSharedPreferences("maks_settings", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     val cacheDir: File = File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "yandex_cache").apply {
@@ -42,8 +45,63 @@ class YandexMusicClient(context: Context) {
     fun getToken(): String = prefs.getString(KEY_TOKEN, "")?.trim().orEmpty()
 
     fun setToken(token: String) {
-        prefs.edit().putString(KEY_TOKEN, token.trim()).apply()
+        val clean = token.trim()
+        prefs.edit().putString(KEY_TOKEN, clean).apply()
+        settingsPrefs.edit().putString("yandex_token", clean).apply()
         resetCircuitBreaker()
+    }
+
+    fun isNetworkAllowed(): Boolean {
+        if (!settingsPrefs.getBoolean("yandex_wifi_only", false)) return true
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    fun getCacheStats(): Pair<Int, Long> {
+        val files = cacheDir.listFiles()?.filter { it.isFile && it.name.endsWith(".mp3") }.orEmpty()
+        return files.size to files.sumOf { it.length() }
+    }
+
+    fun clearCache(): Int {
+        var deleted = 0
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.delete()) deleted++
+        }
+        return deleted
+    }
+
+    fun enforceCacheLimit() {
+        val limitMb = settingsPrefs.getInt("yandex_cache_limit_mb", 1024)
+        if (limitMb <= 0) return
+        val maxBytes = limitMb * 1024L * 1024L
+        val files = cacheDir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".mp3") }
+            ?.sortedBy { it.lastModified() }
+            .orEmpty()
+        var total = files.sumOf { it.length() }
+        for (file in files) {
+            if (total <= maxBytes) break
+            val len = file.length()
+            if (file.delete()) total -= len
+        }
+    }
+
+    suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(IllegalStateException("????? ?? ?????"))
+        resetCircuitBreaker()
+        val body = httpGet("$BASE_URL/account/status")
+            ?: return@withContext Result.failure(IllegalStateException("??? ?????? ?? ?????? ??????"))
+        runCatching {
+            val root = json.parseToJsonElement(body).jsonObject
+            val account = root["result"]?.jsonObject?.get("account")?.jsonObject
+            val login = account?.get("displayName")?.jsonPrimitive?.content
+                ?: account?.get("login")?.jsonPrimitive?.content
+                ?: "??????? ???????????"
+            login
+        }
     }
 
     fun isConfigured(): Boolean = getToken().isNotEmpty()
@@ -86,7 +144,7 @@ class YandexMusicClient(context: Context) {
 
     suspend fun fetchWaveTracks(stationId: String = "user:onyourwave"): List<YandexTrackMeta> =
         withContext(Dispatchers.IO) {
-            if (!isConfigured() || isTemporarilyDown()) return@withContext emptyList()
+            if (!isConfigured() || isTemporarilyDown() || !isNetworkAllowed()) return@withContext emptyList()
             val body = httpGet("$BASE_URL/rotor/station/$stationId/tracks") ?: return@withContext emptyList()
             runCatching {
                 val root = json.parseToJsonElement(body).jsonObject
@@ -117,7 +175,7 @@ class YandexMusicClient(context: Context) {
         val existing = findCachedFile(meta.id) ?: cachedFileFor(meta).takeIf { it.exists() && it.length() > 16_384 }
         if (existing != null) return@withContext existing
 
-        if (!isConfigured() || isTemporarilyDown()) return@withContext null
+        if (!isConfigured() || isTemporarilyDown() || !isNetworkAllowed()) return@withContext null
 
         val directUrl = resolveDirectDownloadUrl(meta.id) ?: return@withContext null
         val target = cachedFileFor(meta)
@@ -155,6 +213,7 @@ class YandexMusicClient(context: Context) {
                 tmp.delete()
             }
             markOk()
+            enforceCacheLimit()
             Log.i(TAG, "Downloaded: ${target.name} (${target.length() / 1024} KB)")
             target
         }.onFailure {
@@ -168,10 +227,16 @@ class YandexMusicClient(context: Context) {
         val infoUrl = runCatching {
             val items = json.parseToJsonElement(infoBody).jsonObject["result"]?.jsonArray
                 ?: return@runCatching null
-            items.map { it.jsonObject }
+            val mp3Items = items.map { it.jsonObject }
                 .filter { it["codec"]?.jsonPrimitive?.content == "mp3" }
-                .maxByOrNull { it["bitrateInKbps"]?.jsonPrimitive?.intOrNull ?: 0 }
-                ?.get("downloadInfoUrl")?.jsonPrimitive?.content
+            val chosen = if (settingsPrefs.getBoolean("yandex_high_quality", true)) {
+                mp3Items.maxByOrNull { it["bitrateInKbps"]?.jsonPrimitive?.intOrNull ?: 0 }
+            } else {
+                mp3Items.filter { (it["bitrateInKbps"]?.jsonPrimitive?.intOrNull ?: 0) <= 192 }
+                    .maxByOrNull { it["bitrateInKbps"]?.jsonPrimitive?.intOrNull ?: 0 }
+                    ?: mp3Items.minByOrNull { it["bitrateInKbps"]?.jsonPrimitive?.intOrNull ?: 0 }
+            }
+            chosen?.get("downloadInfoUrl")?.jsonPrimitive?.content
         }.getOrNull() ?: return null
 
         val sep = if ("?" in infoUrl) "&" else "?"
@@ -245,7 +310,7 @@ class YandexMusicClient(context: Context) {
     }
 
     private fun sanitizeFileName(name: String): String =
-        name.replace(Regex("[\\/:*?"<>|]"), "_").trim().take(80)
+        name.replace(Regex("""[\/:*?"<>|]"""), "_").trim().take(80)
 
     companion object {
         private const val TAG = "YandexMusicClient"

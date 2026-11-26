@@ -363,6 +363,7 @@ fun MaksScreen(
 
     var activeTab by remember { mutableStateOf(MainTab.PLAYER) }
     var playerViewMode by remember { mutableStateOf(PlayerViewMode.PLAYER) }
+    var showSettingsScreen by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -437,6 +438,7 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onSubmitCommand = { cmd -> viewModel.submitCommand(cmd) },
+                                onOpenSettings = { showSettingsScreen = true },
                             )
                         }
                     }
@@ -493,6 +495,16 @@ fun MaksScreen(
                         onPlayQueueIndex = { idx -> viewModel.playQueueIndex(idx) },
                         onRebuildWave = { viewModel.playWave() },
                         onOpenEq = { activeTab = MainTab.EQ },
+                    )
+                }
+
+                if (showSettingsScreen) {
+                    MaksSettingsScreen(
+                        viewModel = viewModel,
+                        alwaysListening = alwaysListening,
+                        onToggleAlwaysListening = onToggleAlwaysListening,
+                        onOpenEq = { activeTab = MainTab.EQ },
+                        onClose = { showSettingsScreen = false },
                     )
                 }
 

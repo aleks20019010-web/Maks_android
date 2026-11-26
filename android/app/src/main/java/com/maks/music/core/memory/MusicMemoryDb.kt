@@ -26,6 +26,13 @@ import kotlinx.serialization.json.put
  */
 class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
 
+    data class BlacklistedEntry(
+        val id: String,
+        val artist: String,
+        val title: String,
+        val isArtist: Boolean,
+    )
+
     data class ImportResult(
         val likedAdded: Int,
         val dislikedTracksAdded: Int,
@@ -528,6 +535,50 @@ class MusicMemoryDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null,
             while (c.moveToNext()) out += c.getString(0)
         }
         return out
+    }
+
+    fun getBlacklistedEntries(): List<BlacklistedEntry> {
+        val list = mutableListOf<BlacklistedEntry>()
+        readableDatabase.rawQuery(
+            "SELECT artist, COALESCE(NULLIF(display_name, ''), artist) FROM artist_stats WHERE blacklisted = 1 ORDER BY display_name ASC",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val key = c.getString(0).orEmpty()
+                val name = c.getString(1).orEmpty()
+                if (key.isNotBlank()) {
+                    list += BlacklistedEntry(id = key, artist = name, title = "", isArtist = true)
+                }
+            }
+        }
+        readableDatabase.rawQuery(
+            "SELECT track_id, artist, title FROM track_stats WHERE blacklisted = 1 ORDER BY last_played DESC",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val tid = c.getString(0).orEmpty()
+                val artist = c.getString(1).orEmpty()
+                val title = c.getString(2).orEmpty()
+                if (tid.isNotBlank()) {
+                    list += BlacklistedEntry(id = tid, artist = artist, title = title, isArtist = false)
+                }
+            }
+        }
+        return list
+    }
+
+    fun unblacklistArtist(artistKey: String) {
+        writableDatabase.execSQL(
+            "UPDATE artist_stats SET blacklisted = 0, weight = 0.0 WHERE artist = ?",
+            arrayOf(artistKey.trim().lowercase())
+        )
+    }
+
+    fun unblacklistTrack(trackId: String) {
+        writableDatabase.execSQL(
+            "UPDATE track_stats SET blacklisted = 0 WHERE track_id = ?",
+            arrayOf(trackId)
+        )
     }
 
     fun getArtistWeights(): Map<String, Double> {

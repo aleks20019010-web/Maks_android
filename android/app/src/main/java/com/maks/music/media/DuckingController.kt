@@ -22,6 +22,9 @@ class DuckingController(
         private set
 
     @Volatile
+    var defaultDuckLevel: Float = DUCK_LEVEL
+
+    @Volatile
     private var duckMultiplier: Float = 1.0f
 
     @Volatile
@@ -38,7 +41,7 @@ class DuckingController(
         applyCombinedVolume()
     }
 
-    fun duck(duckFactor: Float = DUCK_LEVEL) {
+    fun duck(duckFactor: Float = defaultDuckLevel) {
         activeDuckCount++
         val target = duckFactor.coerceIn(0f, 1f)
         animateDuckTo(target, durationMs = FADE_DUCK_MS)

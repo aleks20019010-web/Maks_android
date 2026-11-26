@@ -3,6 +3,7 @@ package com.maks.music
 import android.app.Application
 import android.content.Intent
 import com.maks.music.core.AndroidAssetProvider
+import com.maks.music.core.MaksSettingsStore
 import com.maks.music.core.memory.AppraisalPolicy
 import com.maks.music.core.memory.MusicMemoryDb
 import com.maks.music.core.nlu.MusicDecisionEngine
@@ -47,6 +48,8 @@ class MaksApplication : Application() {
 
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    lateinit var settingsStore: MaksSettingsStore
+        private set
     lateinit var memoryDb: MusicMemoryDb
         private set
     lateinit var libraryScanner: LocalLibraryScanner
@@ -77,6 +80,7 @@ class MaksApplication : Application() {
         super.onCreate()
         val assets = AndroidAssetProvider(applicationContext.assets)
 
+        settingsStore = MaksSettingsStore(this)
         memoryDb = MusicMemoryDb(this)
         libraryScanner = LocalLibraryScanner(this, assets)
         personalityEngine = PersonalityEngine(assets)
@@ -141,7 +145,7 @@ class MaksApplication : Application() {
                     if (isShutdownPhrase(recognizedText)) {
                         shutdownApp()
                     } else {
-                        router.handleCommand(recognizedText, silentControls = isHotWord)
+                        router.handleCommand(recognizedText, silentControls = isHotWord || settingsStore.state.value.silentControls)
                     }
                 }
             },
@@ -151,6 +155,12 @@ class MaksApplication : Application() {
                 }
             }
         )
+        mainScope.launch {
+            settingsStore.state.collect { cfg ->
+                musicController.ducking.defaultDuckLevel = cfg.duckLevelPercent / 100f
+                ttsManager.userSpeechRateMultiplier = cfg.ttsSpeechRate
+            }
+        }
         voiceEngine.preloadModelAsync()
     }
 

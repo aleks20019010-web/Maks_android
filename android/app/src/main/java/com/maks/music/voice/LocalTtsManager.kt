@@ -188,6 +188,8 @@ class LocalTtsManager(
         }
     }
 
+    @Volatile var userSpeechRateMultiplier: Float = 1.0f
+
     fun speak(reply: MaksReply) {
         val chunks = reply.speechChunks.ifEmpty {
             val clean = reply.displayText.trim()
@@ -200,7 +202,7 @@ class LocalTtsManager(
 
         val engine = sherpaTts
         if (engine != null) {
-            val speed = reply.speechRate.coerceIn(0.75f, 1.4f)
+            val speed = (reply.speechRate * userSpeechRateMultiplier).coerceIn(0.75f, 1.5f)
             ttsExecutor.execute {
                 speakWithSherpa(engine, reply, chunks, speed, token)
             }
@@ -313,7 +315,7 @@ class LocalTtsManager(
         if (textToSpeak.isEmpty()) return
 
         notifySpeechStarted()
-        engine.setSpeechRate(reply.speechRate)
+        engine.setSpeechRate((reply.speechRate * userSpeechRateMultiplier).coerceIn(0.75f, 1.5f))
         engine.setPitch(reply.speechPitch)
 
         val params = Bundle().apply {

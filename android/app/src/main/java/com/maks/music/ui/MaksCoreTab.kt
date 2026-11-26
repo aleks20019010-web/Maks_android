@@ -69,6 +69,7 @@ internal fun MaksCoreTab(
     onToggleAlwaysListening: () -> Unit,
     onShutdownApp: () -> Unit,
     onSubmitCommand: (String) -> Unit,
+    onOpenSettings: () -> Unit = {},
 ) {
     var commandText by remember { mutableStateOf("") }
     val context = LocalContext.current
@@ -100,10 +101,7 @@ internal fun MaksCoreTab(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 IconButton(
-                    onClick = {
-                        tokenInput = yandexPrefsClient.getToken()
-                        showSettingsDialog = true
-                    },
+                    onClick = onOpenSettings,
                     modifier = Modifier.size(38.dp),
                 ) {
                     Icon(
@@ -308,66 +306,4 @@ internal fun MaksCoreTab(
         }
     }
 
-    if (showSettingsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            containerColor = MaksColors.SpaceSurfaceElevated,
-            titleContentColor = MaksColors.TextPrimary,
-            textContentColor = MaksColors.TextSecondary,
-            title = {
-                Text(
-                    text = "?????? ??????",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = if (isYandexConnected) {
-                            "????? ????? ? ????? ? ??????-????? ??????? (prefetch 5 ??????)."
-                        } else {
-                            "???????? OAuth-????? ?????? ??????. ??? ???? ???? ????????????? ?????? ????????? ??????????."
-                        },
-                        fontSize = 13.sp,
-                        color = MaksColors.TextSecondary,
-                    )
-                    OutlinedTextField(
-                        value = tokenInput,
-                        onValueChange = { tokenInput = it },
-                        placeholder = {
-                            Text("y0_AgAAAA...", color = MaksColors.TextMuted, fontSize = 13.sp)
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaksColors.SpaceSurface,
-                            unfocusedContainerColor = MaksColors.SpaceSurface,
-                            focusedBorderColor = MaksColors.CyanAccent,
-                            unfocusedBorderColor = MaksColors.SpaceBorder,
-                            focusedTextColor = MaksColors.TextPrimary,
-                            unfocusedTextColor = MaksColors.TextPrimary,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        yandexPrefsClient.setToken(tokenInput)
-                        isYandexConnected = yandexPrefsClient.isConfigured()
-                        showSettingsDialog = false
-                    },
-                ) {
-                    Text("?????????", color = MaksColors.CyanAccent, fontWeight = FontWeight.SemiBold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSettingsDialog = false }) {
-                    Text("??????", color = MaksColors.TextMuted)
-                }
-            },
-        )
-    }
 }

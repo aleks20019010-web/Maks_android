@@ -52,7 +52,14 @@ class YandexQueueBridge(
                     if (q.isEmpty() || idx < 0) break
 
                     // ???????, ??????? ?? ????????? PREFETCH_AHEAD ?????? ??? ????????? ??????? ?? ?????
-                    val lookaheadEnd = (idx + PREFETCH_AHEAD).coerceAtMost(q.lastIndex)
+                    val targetAhead = runCatching {
+                        val xml = File(client.cacheDir.parentFile?.parentFile, "shared_prefs/maks_settings.xml")
+                        if (xml.exists()) {
+                            Regex("""name="yandex_prefetch_count" value="(\d+)"""")
+                                .find(xml.readText())?.groupValues?.get(1)?.toIntOrNull()
+                        } else null
+                    }.getOrNull()?.coerceIn(1, 15) ?: PREFETCH_AHEAD
+                    val lookaheadEnd = (idx + targetAhead).coerceAtMost(q.lastIndex)
                     var readyAhead = 0
                     for (i in (idx + 1)..lookaheadEnd) {
                         if (q[i].id.startsWith(YA_PREFIX) || q[i].displayName.startsWith(YA_LOCAL_MARKER)) {
@@ -61,7 +68,7 @@ class YandexQueueBridge(
                             break
                         }
                     }
-                    if (readyAhead >= PREFETCH_AHEAD) break
+                    if (readyAhead >= targetAhead) break
 
                     val nextTrack = fetchAndPrepareNextWaveTrack(
                         stationId = stationId,
@@ -182,8 +189,8 @@ class YandexQueueBridge(
 
     private fun normalizeKey(s: String): String =
         s.lowercase()
-            .replace(Regex("[^a-z?-??0-9 ]"), " ")
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("""[^a-z\u0430-\u044f\u04510-9 ]"""), " ")
+            .replace(Regex("""\s+"""), " ")
             .trim()
 
     companion object {

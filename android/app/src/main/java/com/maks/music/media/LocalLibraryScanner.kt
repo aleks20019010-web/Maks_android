@@ -88,6 +88,11 @@ class LocalLibraryScanner(
         prefs.edit().putStringSet(KEY_FOLDERS, current).apply()
     }
 
+    private fun minDurationMs(): Long =
+        context.getSharedPreferences("maks_settings", Context.MODE_PRIVATE)
+            .getInt("ignore_short_tracks_sec", 30)
+            .coerceAtLeast(0) * 1000L
+
     fun scan(): List<LocalTrack> {
         missingThumbIds.clear()
         val result = mutableListOf<LocalTrack>()
@@ -171,7 +176,8 @@ class LocalLibraryScanner(
 
                     val duration = if (durCol >= 0) cursor.getLong(durCol) else 0L
                     val isMusic = isMusicCol < 0 || cursor.getInt(isMusicCol) != 0
-                    if (duration in 1L until 15_000L) continue
+                    val minDur = minDurationMs()
+                    if (minDur > 0L && duration in 1L until minDur) continue
                     if (!isMusic && !hasAudioExtension(displayName)) continue
 
                     val id = cursor.getLong(idCol)
@@ -269,7 +275,8 @@ class LocalLibraryScanner(
                     }
                     runCatching { retriever.release() }
 
-                    if (duration in 1L until 15_000L) continue
+                    val minDur = minDurationMs()
+                    if (minDur > 0L && duration in 1L until minDur) continue
                     val dedupeKey = "${name.lowercase()}|${duration / 1000L}"
                     if (name.isNotBlank() && !seenKeys.add(dedupeKey)) continue
 
