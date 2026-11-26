@@ -439,7 +439,6 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onSubmitCommand = { cmd -> viewModel.submitCommand(cmd) },
-                                onOpenSettings = { showSettingsScreen = true },
                             )
                         }
                     }
@@ -462,7 +461,7 @@ fun MaksScreen(
                         player = player,
                         accent = accent,
                         hasAudioPermission = hasAudioPermission,
-                        loadThumbnail = { viewModel.loadTrackThumbnail(it) },
+                        loadThumbnail = { track -> viewModel.loadTrackThumbnail(track) },
                         onRequestAudioPermission = onRequestAudioPermission,
                         onPickMusicFolder = onPickMusicFolder,
                         onRefresh = { viewModel.refreshLibrary() },
@@ -492,7 +491,7 @@ fun MaksScreen(
                     MainTab.QUEUE -> QueueTab(
                         player = player,
                         accent = accent,
-                        loadThumbnail = { viewModel.loadTrackThumbnail(it) },
+                        loadThumbnail = { track -> viewModel.loadTrackThumbnail(track) },
                         onPlayQueueIndex = { idx -> viewModel.playQueueIndex(idx) },
                         onRebuildWave = { viewModel.playWave() },
                         onOpenEq = { activeTab = MainTab.EQ },

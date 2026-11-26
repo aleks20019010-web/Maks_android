@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -91,6 +93,18 @@ internal fun MaksSettingsScreen(
     val player by viewModel.playerState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) viewModel.exportPreferencesToUri(uri)
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) viewModel.importPreferencesFromUri(uri)
+    }
+
 
     var tokenDraft by remember(settings.yandexToken) { mutableStateOf(settings.yandexToken) }
     var showToken by remember { mutableStateOf(false) }
@@ -649,6 +663,48 @@ internal fun MaksSettingsScreen(
                     }
                 }
             }
+
+
+                SettingsDivider()
+
+                Text(
+                    text = "База лайков и дизлайков (JSON)",
+                    color = MaksColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Совместимо с liked_tracks.json десктопного Макса",
+                    color = MaksColors.TextMuted,
+                    fontSize = 12.sp,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilledTonalButton(
+                        onClick = { exportLauncher.launch("maks_liked_tracks.json") },
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaksColors.SpaceSurfaceRecessed,
+                            contentColor = MaksColors.TextPrimary,
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Экспорт", fontSize = 12.sp)
+                    }
+                    FilledTonalButton(
+                        onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaksColors.SpaceSurfaceRecessed,
+                            contentColor = MaksColors.TextPrimary,
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Импорт", fontSize = 12.sp)
+                    }
+                }
 
             // 5. СИСТЕМА И НАДЁЖНОСТЬ
             SettingsSectionCard(

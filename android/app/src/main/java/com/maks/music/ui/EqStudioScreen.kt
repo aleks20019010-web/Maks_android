@@ -77,17 +77,10 @@ fun EqStudioTab(
     onBalanceChange: (Float) -> Unit,
     onSelectSleepTimer: (Int?) -> Unit,
     onSelectCrossfade: (Float) -> Unit = {},
-    onExportPreferencesUri: (Uri) -> Unit = {},
-    onImportPreferencesUri: (Uri) -> Unit = {},
 ) {
     val eqEnabled = player.eqEnabled
     val bands = player.eqBandsDb
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri ->
-        if (uri != null) onExportPreferencesUri(uri)
-    }
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -434,37 +427,6 @@ fun EqStudioTab(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                text = "База лайков и дизлайков (JSON)",
-                color = MaksColors.TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "Совместимо с liked_tracks.json десктопного Макса",
-                color = MaksColors.TextMuted,
-                fontSize = 12.sp,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaksColors.SpaceSurfaceElevated)
-                        .border(1.dp, MaksColors.SpaceBorder, RoundedCornerShape(12.dp))
-                        .clickable { exportLauncher.launch("maks_preferences.json") }
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Upload,
-                        contentDescription = null,
-                        tint = MaksColors.CyanAccent,
-                        modifier = Modifier.size(16.dp),
-                    )
                     Spacer(Modifier.width(6.dp))
                     Text("Экспорт", color = MaksColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
