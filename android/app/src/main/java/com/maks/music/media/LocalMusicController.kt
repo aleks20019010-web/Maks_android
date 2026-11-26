@@ -243,6 +243,7 @@ class LocalMusicController(
         yandexBridge.ensureWavePrefetch(
             scope = scope,
             stationId = "user:onyourwave",
+            languageFilter = currentWaveSettings.languageFilter,
             currentQueue = { queue },
             currentIndex = { currentIndex },
             localTracksProvider = { scanner.allTracks() },

@@ -33,6 +33,7 @@ class YandexQueueBridge(
     fun ensureWavePrefetch(
         scope: CoroutineScope,
         stationId: String = "user:onyourwave",
+        languageFilter: String? = null,
         currentQueue: () -> List<LocalTrack>,
         currentIndex: () -> Int,
         localTracksProvider: () -> List<LocalTrack>,
@@ -72,6 +73,7 @@ class YandexQueueBridge(
 
                     val nextTrack = fetchAndPrepareNextWaveTrack(
                         stationId = stationId,
+                        languageFilter = languageFilter,
                         localTracks = localTracksProvider(),
                         blacklistedIds = blacklistedIdsProvider(),
                     ) ?: break
@@ -110,18 +112,26 @@ class YandexQueueBridge(
         return result
     }
 
+    private fun matchesLanguage(track: LocalTrack, languageFilter: String?): Boolean = when (languageFilter) {
+        "russian" -> track.isRussian
+        "not-russian" -> !track.isRussian
+        else -> true
+    }
+
     private suspend fun fetchAndPrepareNextWaveTrack(
         stationId: String,
+        languageFilter: String?,
         localTracks: List<LocalTrack>,
         blacklistedIds: Set<String>,
     ): LocalTrack? {
-        repeat(6) {
+        val attempts = if (languageFilter != null) 14 else 6
+        repeat(attempts) {
             val meta = popNextWaveMeta(stationId) ?: return null
             val yaId = "$YA_PREFIX${meta.id}"
             if (yaId in blacklistedIds) return@repeat
 
             val resolved = resolveMetaToLocalTrack(meta, localTracks, markAsWaveLocal = true)
-            if (resolved != null && resolved.id !in blacklistedIds) {
+            if (resolved != null && resolved.id !in blacklistedIds && matchesLanguage(resolved, languageFilter)) {
                 return resolved
             }
         }
