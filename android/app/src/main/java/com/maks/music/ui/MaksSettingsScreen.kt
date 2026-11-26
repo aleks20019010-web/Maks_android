@@ -434,16 +434,20 @@ internal fun MaksSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         listOf(0.75f to "0.75x", 1.0f to "1.0x", 1.35f to "1.35x", 1.75f to "1.75x").forEach { (preset, label) ->
+                            val selected = kotlin.math.abs(gainVal - preset) < 0.02f
                             FilledTonalButton(
-                                onClick = {
-                                    runCatching {
-                                        val m = viewModel.javaClass.methods.firstOrNull { it.name == "setMicGainMultiplier" }
-                                        m?.invoke(viewModel, preset)
-                                    }
-                                },
+                                onClick = { viewModel.setMicGainMultiplier(preset) },
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = if (selected) MaksColors.LavenderGlow.copy(alpha = 0.28f) else MaksColors.SpaceSurfaceElevated,
+                                    contentColor = if (selected) MaksColors.TextPrimary else MaksColors.TextSecondary,
+                                ),
                                 modifier = Modifier.weight(1f),
                             ) {
-                                Text(label, fontSize = 11.sp)
+                                Text(
+                                    text = label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
                             }
                         }
                     }
@@ -576,6 +580,17 @@ internal fun MaksSettingsScreen(
 
                 val context = androidx.compose.ui.platform.LocalContext.current
                 val currentDirUri = runCatching { settings.yandexDownloadDirUri }.getOrDefault("")
+                val folderDisplayName = remember(currentDirUri) {
+                    if (currentDirUri.isBlank()) {
+                        "По умолчанию (yandex_cache)"
+                    } else {
+                        runCatching {
+                            val parsed = android.net.Uri.parse(currentDirUri)
+                            val docName = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, parsed)?.name
+                            if (!docName.isNullOrBlank()) "$docName ($currentDirUri)" else currentDirUri
+                        }.getOrDefault(currentDirUri)
+                    }
+                }
                 val dirPickerLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.OpenDocumentTree()
                 ) { uri ->
@@ -585,30 +600,36 @@ internal fun MaksSettingsScreen(
                                 android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             context.contentResolver.takePersistableUriPermission(uri, flags)
                         }
-                        runCatching {
-                            val m = viewModel.javaClass.methods.firstOrNull { it.name == "setYandexDownloadDirUri" }
-                            if (m != null) {
-                                m.invoke(viewModel, uri.toString())
-                            } else {
-                                context.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
-                                    .edit().putString("yandex_download_dir_uri", uri.toString()).apply()
-                            }
-                        }
+                        viewModel.setYandexDownloadDirUri(uri.toString())
                     }
                 }
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Папка загрузки Яндекс Музыки",
+                            color = MaksColors.TextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        if (currentDirUri.isNotBlank()) {
+                            Text(
+                                text = "Выбрана папка",
+                                color = MaksColors.LavenderGlow,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                     Text(
-                        text = "Папка загрузки Яндекс Музыки",
-                        color = MaksColors.TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        text = if (currentDirUri.isBlank()) "По умолчанию (yandex_cache)" else currentDirUri,
-                        color = MaksColors.TextMuted,
+                        text = folderDisplayName,
+                        color = if (currentDirUri.isNotBlank()) MaksColors.TextPrimary else MaksColors.TextMuted,
                         fontSize = 11.sp,
                         maxLines = 2,
                     )
@@ -624,17 +645,7 @@ internal fun MaksSettingsScreen(
                         }
                         if (currentDirUri.isNotBlank()) {
                             FilledTonalButton(
-                                onClick = {
-                                    runCatching {
-                                        val m = viewModel.javaClass.methods.firstOrNull { it.name == "setYandexDownloadDirUri" }
-                                        if (m != null) {
-                                            m.invoke(viewModel, "")
-                                        } else {
-                                            context.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
-                                                .edit().remove("yandex_download_dir_uri").apply()
-                                        }
-                                    }
-                                },
+                                onClick = { viewModel.setYandexDownloadDirUri("") },
                             ) {
                                 Text("Сброс", fontSize = 11.sp)
                             }

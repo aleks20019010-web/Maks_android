@@ -155,30 +155,28 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerPushToTalk() = app.voiceEngine.triggerPushToTalk()
     fun setAgcEnabled(enabled: Boolean) {
+        app.settingsStore.setAgcEnabled(enabled)
+        val gain = app.settingsStore.state.value.micGainMultiplier
         runCatching {
-            val field = app.javaClass.declaredFields.firstOrNull { it.name.contains("voice", ignoreCase = true) }
-            field?.isAccessible = true
-            val eng = field?.get(app)
-            eng?.javaClass?.methods?.firstOrNull { it.name == "applyMicGainSettings" }
-        }
-        val currentGain = runCatching { settingsState.value.micGainMultiplier }.getOrDefault(1.0f)
-        runCatching {
-            val prefs = app.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("agc_enabled", enabled).apply()
-        }
-        runCatching {
-            val current = settingsState.value
-            val updatedField = settingsState.javaClass.getMethod("getValue").invoke(settingsState)
-            val copyMethod = updatedField.javaClass.getMethod("copy", Boolean::class.javaPrimitiveType)
+            val eng = app.voiceEngine
+            val m = eng.javaClass.methods.firstOrNull { it.name == "applyMicGainSettings" }
+            m?.invoke(eng, enabled, gain)
         }
     }
 
     fun setMicGainMultiplier(multiplier: Float) {
         val clamped = multiplier.coerceIn(0.5f, 3.0f)
+        app.settingsStore.setMicGainMultiplier(clamped)
+        val agc = app.settingsStore.state.value.agcEnabled
         runCatching {
-            val prefs = app.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
-            prefs.edit().putFloat("mic_gain_multiplier", clamped).apply()
+            val eng = app.voiceEngine
+            val m = eng.javaClass.methods.firstOrNull { it.name == "applyMicGainSettings" }
+            m?.invoke(eng, agc, clamped)
         }
+    }
+
+    fun setYandexDownloadDirUri(uri: String) {
+        app.settingsStore.setYandexDownloadDirUri(uri)
     }
 
 }
