@@ -573,6 +573,75 @@ internal fun MaksSettingsScreen(
                 }
             }
 
+
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val currentDirUri = runCatching { settings.yandexDownloadDirUri }.getOrDefault("")
+                val dirPickerLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocumentTree()
+                ) { uri ->
+                    if (uri != null) {
+                        runCatching {
+                            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            context.contentResolver.takePersistableUriPermission(uri, flags)
+                        }
+                        runCatching {
+                            val m = viewModel.javaClass.methods.firstOrNull { it.name == "setYandexDownloadDirUri" }
+                            if (m != null) {
+                                m.invoke(viewModel, uri.toString())
+                            } else {
+                                context.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
+                                    .edit().putString("yandex_download_dir_uri", uri.toString()).apply()
+                            }
+                        }
+                    }
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "Папка загрузки Яндекс Музыки",
+                        color = MaksColors.TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = if (currentDirUri.isBlank()) "По умолчанию (yandex_cache)" else currentDirUri,
+                        color = MaksColors.TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilledTonalButton(
+                            onClick = { dirPickerLauncher.launch(null) },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Выбрать папку", fontSize = 11.sp)
+                        }
+                        if (currentDirUri.isNotBlank()) {
+                            FilledTonalButton(
+                                onClick = {
+                                    runCatching {
+                                        val m = viewModel.javaClass.methods.firstOrNull { it.name == "setYandexDownloadDirUri" }
+                                        if (m != null) {
+                                            m.invoke(viewModel, "")
+                                        } else {
+                                            context.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
+                                                .edit().remove("yandex_download_dir_uri").apply()
+                                        }
+                                    }
+                                },
+                            ) {
+                                Text("Сброс", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+
             // 4. МЕДИАТЕКА И УМНАЯ ВОЛНА
             SettingsSectionCard(
                 title = "Медиатека и Умная волна",

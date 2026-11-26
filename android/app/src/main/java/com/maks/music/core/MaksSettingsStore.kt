@@ -10,7 +10,8 @@ data class MaksSettingsState(
     val yandexToken: String = "",
     val yandexPrefetchCount: Int = 5,
     val yandexWifiOnly: Boolean = false,
-    val yandexCacheLimitMb: Int = 1024,
+    val yandexCacheLimitMb: Int = 0,
+    val yandexDownloadDirUri: String = "",
     val yandexHighQuality: Boolean = true,
     val hotwordsEnabled: Boolean = true,
     val agcEnabled: Boolean = true,
@@ -39,7 +40,8 @@ class MaksSettingsStore(context: Context) {
             yandexToken = token.trim(),
             yandexPrefetchCount = prefs.getInt(KEY_YA_PREFETCH, 5).coerceIn(1, 15),
             yandexWifiOnly = prefs.getBoolean(KEY_YA_WIFI_ONLY, false),
-            yandexCacheLimitMb = prefs.getInt(KEY_YA_CACHE_LIMIT_MB, 1024),
+            yandexCacheLimitMb = prefs.getInt(KEY_YA_CACHE_LIMIT_MB, 0),
+            yandexDownloadDirUri = prefs.getString(KEY_YA_DOWNLOAD_DIR, "").orEmpty(),
             yandexHighQuality = prefs.getBoolean(KEY_YA_HIGH_QUALITY, true),
             hotwordsEnabled = prefs.getBoolean(KEY_HOTWORDS, true),
             pauseListeningOnHeadset = prefs.getBoolean(KEY_PAUSE_HEADSET, false),
@@ -128,6 +130,7 @@ class MaksSettingsStore(context: Context) {
         private const val KEY_YA_PREFETCH = "yandex_prefetch_count"
         private const val KEY_YA_WIFI_ONLY = "yandex_wifi_only"
         private const val KEY_YA_CACHE_LIMIT_MB = "yandex_cache_limit_mb"
+        private const val KEY_YA_DOWNLOAD_DIR = "yandex_download_dir_uri"
         private const val KEY_YA_HIGH_QUALITY = "yandex_high_quality"
         private const val KEY_HOTWORDS = "hotwords_enabled"
         private const val KEY_PAUSE_HEADSET = "pause_listening_on_headset"

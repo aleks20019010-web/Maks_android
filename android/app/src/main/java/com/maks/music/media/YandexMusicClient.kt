@@ -74,7 +74,7 @@ class YandexMusicClient(context: Context) {
     }
 
     fun enforceCacheLimit() {
-        val limitMb = settingsPrefs.getInt("yandex_cache_limit_mb", 1024)
+        val limitMb = settingsPrefs.getInt("yandex_cache_limit_mb", 0)
         if (limitMb <= 0) return
         val maxBytes = limitMb * 1024L * 1024L
         val files = cacheDir.listFiles()
@@ -208,7 +208,7 @@ class YandexMusicClient(context: Context) {
                 return@runCatching null
             }
             if (target.exists()) target.delete()
-            if (!tmp.renameTo(target)) {
+            if (!if (tmp.renameTo(target)) exportToSelectedFolder(target)) {
                 tmp.copyTo(target, overwrite = true)
                 tmp.delete()
             }
@@ -326,4 +326,26 @@ class YandexMusicClient(context: Context) {
         private const val MAX_FAILS = 3
         private const val BLOCK_DURATION_MS = 5 * 60 * 1000L
     }
+    private fun exportToSelectedFolder(sourceFile: File) {
+        val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+        if (uriStr.isBlank() || !sourceFile.exists()) return
+        runCatching {
+            val treeUri = android.net.Uri.parse(uriStr)
+            val docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val parentDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+            val resolver = appContext.contentResolver
+            val outUri = android.provider.DocumentsContract.createDocument(
+                resolver,
+                parentDocUri,
+                "audio/mpeg",
+                sourceFile.nameWithoutExtension
+            ) ?: return
+            resolver.openOutputStream(outUri, "wt")?.use { out ->
+                sourceFile.inputStream().use { inp -> inp.copyTo(out) }
+            }
+        }.onFailure {
+            android.util.Log.w(TAG, "exportToSelectedFolder failed: ${it.message}")
+        }
+    }
+
 }
