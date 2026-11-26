@@ -532,8 +532,25 @@ class LocalMusicController(
         }
     }
 
-    fun volumeUp(): Int = setSystemVolumePercent((getSystemVolumePercent() + 15).coerceAtMost(100))
-    fun volumeDown(): Int = setSystemVolumePercent((getSystemVolumePercent() - 15).coerceAtLeast(0))
+    fun volumeUp(): Int = stepSystemVolume(+1)
+    fun volumeDown(): Int = stepSystemVolume(-1)
+
+    private fun stepSystemVolume(direction: Int): Int {
+        val am = audioManager
+            ?: return setSystemVolumePercent((getSystemVolumePercent() + direction * 7).coerceIn(0, 100))
+        val newPercent = runCatching {
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            val step = (max / 15).coerceAtLeast(1)
+            val target = (cur + direction * step).coerceIn(0, max)
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            ((target * 100f) / max).toInt().coerceIn(0, 100)
+        }.getOrElse {
+            (getSystemVolumePercent() + direction * 7).coerceIn(0, 100)
+        }
+        _uiState.update { it.copy(volumePercent = newPercent) }
+        return newPercent
+    }
 
     fun setSystemVolumePercent(percent: Int): Int {
         val clamped = percent.coerceIn(0, 100)
