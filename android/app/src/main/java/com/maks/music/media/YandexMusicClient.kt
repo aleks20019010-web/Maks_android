@@ -26,6 +26,7 @@ data class YandexTrackMeta(
     val album: String = "",
     val durationMs: Long = 0L,
     val coverUri: String = "",
+    val genre: String = "",
 )
 
 class YandexMusicClient(context: Context) {
@@ -140,6 +141,18 @@ class YandexMusicClient(context: Context) {
     fun findCachedFile(trackId: String): File? {
         val suffix = "[$trackId].mp3"
         return cacheDir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(suffix) && it.length() > 16_384 }
+    }
+
+    suspend fun fetchGenreTracks(genreSlug: String): List<YandexTrackMeta> {
+        val clean = genreSlug.trim().lowercase().removePrefix("genre:")
+        if (clean.isBlank()) return emptyList()
+        val stationTracks = fetchWaveTracks("genre:$clean")
+        if (stationTracks.isNotEmpty()) {
+            return stationTracks.map { if (it.genre.isBlank()) it.copy(genre = clean) else it }
+        }
+        return searchTracks(clean, limit = 12).map {
+            if (it.genre.isBlank()) it.copy(genre = clean) else it
+        }
     }
 
     suspend fun fetchWaveTracks(stationId: String = "user:onyourwave"): List<YandexTrackMeta> =
@@ -295,6 +308,20 @@ class YandexMusicClient(context: Context) {
             .orEmpty()
         val durationMs = obj["durationMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
         val coverUri = obj["coverUri"]?.jsonPrimitive?.content.orEmpty()
+        val rawGenre = buildList {
+            (obj["genres"] as? JsonArray)?.forEach { el ->
+                if (el is JsonPrimitive) add(el.content)
+                else (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.let { add(it) }
+            }
+            obj["genre"]?.jsonPrimitive?.content?.let { add(it) }
+            val firstAlbum = (obj["albums"] as? JsonArray)?.firstOrNull() as? JsonObject
+            firstAlbum?.get("genre")?.jsonPrimitive?.content?.let { add(it) }
+            (firstAlbum?.get("genres") as? JsonArray)?.forEach { el ->
+                if (el is JsonPrimitive) add(el.content)
+                else (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.let { add(it) }
+            }
+        }.firstOrNull { it.isNotBlank() }?.trim()?.lowercase().orEmpty()
+
         return YandexTrackMeta(
             id = id,
             title = title,
@@ -302,6 +329,7 @@ class YandexMusicClient(context: Context) {
             album = album,
             durationMs = durationMs,
             coverUri = coverUri,
+            genre = rawGenre,
         )
     }
 

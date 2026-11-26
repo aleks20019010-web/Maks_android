@@ -737,6 +737,7 @@ private fun WaveSettingsBottomSheet(
     var character by remember(initialSettings) { mutableStateOf(initialSettings.character) }
     var mood by remember(initialSettings) { mutableStateOf(initialSettings.mood) }
     var lang by remember(initialSettings) { mutableStateOf(initialSettings.languageFilter) }
+    var genre by remember(initialSettings) { mutableStateOf(initialSettings.genreFilter) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -813,6 +814,35 @@ private fun WaveSettingsBottomSheet(
                 }
             }
 
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Жанр", color = MaksColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        null to "Любой",
+                        "rock" to "Рок",
+                        "electronic" to "Электроника",
+                        "pop" to "Поп",
+                        "hip-hop" to "Рэп",
+                        "metal" to "Метал",
+                        "indie" to "Инди",
+                        "jazz" to "Джаз",
+                        "classical" to "Классика",
+                    ).forEach { (slug, gLabel) ->
+                        WaveChoiceChip(
+                            label = gLabel,
+                            selected = genre == slug,
+                            accent = accent,
+                            onClick = { genre = slug },
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(4.dp))
 
             Box(
@@ -821,7 +851,7 @@ private fun WaveSettingsBottomSheet(
                     .clip(RoundedCornerShape(16.dp))
                     .background(Brush.horizontalGradient(listOf(MaksColors.VioletAccent, accent)))
                     .clickable {
-                        onApply(WaveSettings(character = character, mood = mood, languageFilter = lang))
+                        onApply(WaveSettings(character = character, mood = mood, languageFilter = lang, genreFilter = genre))
                     }
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,

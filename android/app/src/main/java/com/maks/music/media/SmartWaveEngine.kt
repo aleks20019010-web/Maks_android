@@ -32,6 +32,20 @@ data class WaveSettings(
             "russian" -> parts += "Русская"
             "not-russian" -> parts += "Зарубежная"
         }
+        genreFilter?.takeIf { it.isNotBlank() }?.let { g ->
+            val gLabel = when (g.lowercase()) {
+                "rock" -> "Рок"
+                "electronic", "dnb", "dance" -> "Электроника"
+                "pop" -> "Поп"
+                "rap", "hip-hop" -> "Рэп"
+                "metal" -> "Метал"
+                "indie" -> "Инди"
+                "jazz", "blues" -> "Джаз"
+                "classical", "ambient" -> "Классика"
+                else -> g
+            }
+            parts += gLabel
+        }
         return if (parts.isEmpty()) "Моя волна" else "Волна · ${parts.joinToString(" · ")}"
     }
 }

@@ -173,7 +173,7 @@ class YandexQueueBridge(
             artist = meta.artist.ifBlank { "?????? ??????" },
             title = meta.title.ifBlank { file.nameWithoutExtension },
             album = meta.album,
-            genre = "yandex",
+            genre = meta.genre.ifBlank { "yandex" },
             durationMs = meta.durationMs,
             albumId = 0L,
             displayName = file.name,
