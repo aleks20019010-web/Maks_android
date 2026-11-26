@@ -13,6 +13,8 @@ data class MaksSettingsState(
     val yandexCacheLimitMb: Int = 1024,
     val yandexHighQuality: Boolean = true,
     val hotwordsEnabled: Boolean = true,
+    val agcEnabled: Boolean = true,
+    val micGainMultiplier: Float = 1.0f,
     val pauseListeningOnHeadset: Boolean = false,
     val silentControls: Boolean = false,
     val ttsSpeechRate: Float = 1.0f,

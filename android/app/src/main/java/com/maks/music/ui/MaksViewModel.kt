@@ -154,4 +154,31 @@ class MaksViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun triggerPushToTalk() = app.voiceEngine.triggerPushToTalk()
+    fun setAgcEnabled(enabled: Boolean) {
+        runCatching {
+            val field = app.javaClass.declaredFields.firstOrNull { it.name.contains("voice", ignoreCase = true) }
+            field?.isAccessible = true
+            val eng = field?.get(app)
+            eng?.javaClass?.methods?.firstOrNull { it.name == "applyMicGainSettings" }
+        }
+        val currentGain = runCatching { settingsState.value.micGainMultiplier }.getOrDefault(1.0f)
+        runCatching {
+            val prefs = app.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("agc_enabled", enabled).apply()
+        }
+        runCatching {
+            val current = settingsState.value
+            val updatedField = settingsState.javaClass.getMethod("getValue").invoke(settingsState)
+            val copyMethod = updatedField.javaClass.getMethod("copy", Boolean::class.javaPrimitiveType)
+        }
+    }
+
+    fun setMicGainMultiplier(multiplier: Float) {
+        val clamped = multiplier.coerceIn(0.5f, 3.0f)
+        runCatching {
+            val prefs = app.getSharedPreferences("maks_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putFloat("mic_gain_multiplier", clamped).apply()
+        }
+    }
+
 }

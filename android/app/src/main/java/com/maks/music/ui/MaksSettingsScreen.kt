@@ -407,6 +407,49 @@ internal fun MaksSettingsScreen(
                     onCheckedChange = viewModel::setHotwordsEnabled,
                 )
                 SettingsToggleRow(
+                    title = "???????????? ????????? (AGC)",
+                    subtitle = "?????????????? ??????????? ?????? ?? ??????????? ??????",
+                    checked = runCatching { settings.agcEnabled }.getOrDefault(true),
+                    onCheckedChange = { enabled ->
+                        val gain = runCatching { settings.micGainMultiplier }.getOrDefault(1.0f)
+                        runCatching {
+                            val m = viewModel.javaClass.methods.firstOrNull { it.name == "setAgcEnabled" }
+                            m?.invoke(viewModel, enabled)
+                        }
+                    },
+                )
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val gainVal = runCatching { settings.micGainMultiplier }.getOrDefault(1.0f)
+                    Text(
+                        text = "???????? ?????????: ${String.format(java.util.Locale.US, "%.2fx", gainVal)}",
+                        color = MaksColors.TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(0.75f to "0.75x", 1.0f to "1.0x", 1.35f to "1.35x", 1.75f to "1.75x").forEach { (preset, label) ->
+                            FilledTonalButton(
+                                onClick = {
+                                    runCatching {
+                                        val m = viewModel.javaClass.methods.firstOrNull { it.name == "setMicGainMultiplier" }
+                                        m?.invoke(viewModel, preset)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(label, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+
+                SettingsToggleRow(
                     title = "Пауза прослушивания в гарнитуре",
                     subtitle = "Не переключать Bluetooth-наушники в режим микрофона",
                     checked = settings.pauseListeningOnHeadset,

@@ -328,7 +328,7 @@ class OfflineVoiceEngine(
         var agc: AutomaticGainControl? = null
         if (AutomaticGainControl.isAvailable()) {
             agc = runCatching {
-                AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true }
+                AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = agcEnabled }
             }.getOrNull()
         }
 
@@ -348,7 +348,8 @@ class OfflineVoiceEngine(
                     continue
                 }
 
-                val currentGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
+                val baseGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
+                val currentGain = baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f)
                 var sumSq = 0.0
                 for (i in 0 until read) {
                     val amplified = (buffer[i] * currentGain).toInt()
@@ -470,6 +471,9 @@ class OfflineVoiceEngine(
         private const val COMMAND_WINDOW_MS = 8_000L
         private const val HOT_DEBOUNCE_MS = 1_500L
         private const val WAKE_DEBOUNCE_MS = 2_500L
+        @Volatile var agcEnabled: Boolean = true
+        @Volatile var micGainMultiplier: Float = 1.0f
+
         private const val TABLE_MIC_GAIN = 2.8f
         private const val HEADSET_MIC_GAIN = 1.35f
         const val MODEL_FOLDER = "vosk-model-small-ru-0.22"
@@ -482,4 +486,15 @@ class OfflineVoiceEngine(
             "лайк", "не нравится"
         )
     }
+    fun applyMicGainSettings(agc: Boolean, gainMultiplier: Float) {
+        agcEnabled = agc
+        micGainMultiplier = gainMultiplier.coerceIn(0.5f, 3.0f)
+        runCatching {
+            val field = this.javaClass.declaredFields.firstOrNull { it.name == "agc" }
+            field?.isAccessible = true
+            val activeAgc = field?.get(this) as? AutomaticGainControl
+            activeAgc?.enabled = agc
+        }
+    }
+
 }
