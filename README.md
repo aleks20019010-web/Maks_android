@@ -39,4 +39,4 @@ gradle testDebugUnitTest
 (Для оффлайн ASR при локальной сборке) Скачай vosk-model-small-ru-0.22.zip с alphacephei.com/vosk/models и распакуй в:Plaintextandroid/app/src/main/assets/models/vosk-model-small-ru-0.22/
 (или положи модель напрямую на телефон в Android/data/com.maks.music/files/models/vosk-model-small-ru-0.22/).На телефоне убедись, что установлен оффлайн русский голос TTS (Настройки → Система → Язык и ввод → Синтез речи).Интерактивный веб-симулятор (опционально)В корне репозитория находится лёгкий веб-симулятор (src/), который читает те же JSON-ассеты из android/app/src/main/assets/ и позволяет протестировать NLU, характер Макса, эквалайзер и плеер прямо в браузере:Bashnpm install
 npm run dev
-ЛицензияСм. файл LICENSE.
+Лицензия См. файл LICENSE.
