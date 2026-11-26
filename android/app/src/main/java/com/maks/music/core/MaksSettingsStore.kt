@@ -141,4 +141,21 @@ class MaksSettingsStore(context: Context) {
         private const val KEY_WAVE_LANG = "default_wave_language"
         private const val KEY_RESUME_BT = "resume_on_bluetooth"
     }
+
+    fun setAgcEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agc_enabled", enabled).apply()
+        _state.update { it.copy(agcEnabled = enabled) }
+    }
+
+    fun setMicGainMultiplier(multiplier: Float) {
+        val clamped = multiplier.coerceIn(0.5f, 3.0f)
+        prefs.edit().putFloat("mic_gain_multiplier", clamped).apply()
+        _state.update { it.copy(micGainMultiplier = clamped) }
+    }
+
+    fun setYandexDownloadDirUri(uri: String) {
+        val clean = uri.trim()
+        prefs.edit().putString(KEY_YA_DOWNLOAD_DIR, clean).apply()
+        _state.update { it.copy(yandexDownloadDirUri = clean) }
+    }
 }
