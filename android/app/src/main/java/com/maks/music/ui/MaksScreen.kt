@@ -1,4 +1,4 @@
-﻿package com.maks.music.ui
+package com.maks.music.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
@@ -405,6 +405,7 @@ fun MaksScreen(
                                 onToggleAlwaysListening = { onToggleAlwaysListening(!alwaysListening) },
                                 onShutdownApp = onShutdownApp,
                                 onOpenEq = { activeTab = MainTab.EQ },
+                                onOpenSettings = { showSettingsScreen = true },
                                 onOpenQueue = { activeTab = MainTab.QUEUE },
                                 onSwitchToCore = { playerViewMode = PlayerViewMode.MAKS_CORE },
                                 onPushToTalk = onPushToTalk,
@@ -495,6 +496,7 @@ fun MaksScreen(
                         onPlayQueueIndex = { idx -> viewModel.playQueueIndex(idx) },
                         onRebuildWave = { viewModel.playWave() },
                         onOpenEq = { activeTab = MainTab.EQ },
+                                onOpenSettings = { showSettingsScreen = true },
                     )
                 }
 
@@ -504,6 +506,7 @@ fun MaksScreen(
                         alwaysListening = alwaysListening,
                         onToggleAlwaysListening = onToggleAlwaysListening,
                         onOpenEq = { activeTab = MainTab.EQ },
+                                onOpenSettings = { showSettingsScreen = true },
                         onClose = { showSettingsScreen = false },
                     )
                 }

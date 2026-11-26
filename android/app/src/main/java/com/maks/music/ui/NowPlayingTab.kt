@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.Notes
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.ThumbDownOffAlt
@@ -146,6 +147,7 @@ internal fun NowPlayingTab(
     onToggleAlwaysListening: () -> Unit,
     onShutdownApp: () -> Unit,
     onOpenEq: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     onOpenQueue: () -> Unit = {},
     onSwitchToCore: () -> Unit,
     onPushToTalk: () -> Unit,
@@ -204,6 +206,14 @@ internal fun NowPlayingTab(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+                IconButton(onClick = onOpenSettings, modifier = Modifier.size(38.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.Settings,
+                        contentDescription = "Settings",
+                        tint = MaksColors.TextMuted,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
                 if (player.currentLyrics.isNotEmpty()) {
                     IconButton(
                         onClick = {
