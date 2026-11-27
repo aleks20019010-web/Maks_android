@@ -389,18 +389,16 @@ class OfflineVoiceEngine(
                         }
                     }
                 } else {
-                    val partial = extractField(recognizer.partialResult, "partial").trim().lowercase()
+val partial = extractField(recognizer.partialResult, "partial").trim().lowercase()
                     if (!inCommandWindow && partial.isNotEmpty()) {
                         val playing = isMusicPlaying
-                        val isResume = partial == "????????" || partial == "??????????"
+                        val isResume = partial == "продолжи" || partial == "продолжить"
                         val canRun = if (isResume) !playing else playing
                         if (canRun && partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
                             lastHotWordAtMs = now
                             recognizer.reset()
                             onCommandRecognized(partial, true)
                         }
-                    }
-                }
                     }
                 }
             }
@@ -447,7 +445,7 @@ class OfflineVoiceEngine(
 
         if (text in HOT_WORDS) {
             val playing = isMusicPlaying
-            val isResume = text == "????????" || text == "??????????"
+            val isResume = text == "продолжи" || text == "продолжить"
             val canRun = if (isResume) !playing else playing
             if (!canRun) {
                 return

@@ -802,10 +802,7 @@ internal fun MaksSettingsScreen(
                     color = MaksColors.TextMuted,
                     fontSize = 12.sp,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                 {
                     FilledTonalButton(
                         onClick = { exportLauncher.launch("maks_liked_tracks.json") },
                         colors = ButtonDefaults.filledTonalButtonColors(
