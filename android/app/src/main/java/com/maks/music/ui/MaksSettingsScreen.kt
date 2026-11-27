@@ -131,15 +131,6 @@ internal fun MaksSettingsScreen(
         refreshCacheAndBlacklist()
     }
 
-    val isBatteryUnrestricted = remember(context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
-        } else {
-            true
-        }
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
