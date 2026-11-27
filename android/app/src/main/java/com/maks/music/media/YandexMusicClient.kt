@@ -746,7 +746,9 @@ class YandexMusicClient(context: Context) {
     }
 
     private fun sanitizeFileName(name: String): String =
-        .replace(Regex("[^" + "a-zA-Z\u0410-\u044f0-9]+"), " ")
+        name.replace(Regex("[^" + "a-zA-Z0-9\u0410-\u044f\u0401\u0451 _.-]+"), "_")
+            .trim()
+            .take(80)
 
     companion object {
         private const val TAG = "YandexMusicClient"
