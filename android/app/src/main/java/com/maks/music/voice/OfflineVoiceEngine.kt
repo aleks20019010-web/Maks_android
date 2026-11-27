@@ -10,6 +10,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -75,6 +76,9 @@ class OfflineVoiceEngine(
 
     @Volatile
     private var activeRecorder: AudioRecord? = null
+
+    @Volatile
+    private var activeAgc: AutomaticGainControl? = null
 
     @Volatile
     private var usingHeadsetMic: Boolean = false
@@ -150,6 +154,23 @@ class OfflineVoiceEngine(
             runCatching { voskModel?.close() }
             voskModel = null
         }
+    }
+
+    private fun isSpeakerOutputActive(): Boolean {
+        val am = audioManager ?: return false
+        if (usingHeadsetMic) return false
+        val outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val hasExternalOutput = outputs.any {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER))
+        }
+        if (hasExternalOutput) return false
+        return outputs.any { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
     }
 
     private fun routeToPreferredMic(recorder: AudioRecord) {
@@ -277,12 +298,20 @@ class OfflineVoiceEngine(
     }
 
     @SuppressLint("MissingPermission")
-    private fun createBestRecorder(minBuf: Int): AudioRecord? {
-        val sources = listOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-        )
+    private fun createBestRecorder(minBuf: Int, speakerActive: Boolean): AudioRecord? {
+        val sources = if (speakerActive) {
+            listOf(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
+            )
+        } else {
+            listOf(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            )
+        }
         for (src in sources) {
             val rec = runCatching {
                 AudioRecord(
@@ -294,6 +323,7 @@ class OfflineVoiceEngine(
                 )
             }.getOrNull()
             if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+                android.util.Log.i("OfflineVoiceEngine", "AudioRecord source=$src speakerActive=$speakerActive")
                 return rec
             }
             runCatching { rec?.release() }
@@ -309,7 +339,8 @@ class OfflineVoiceEngine(
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4096)
 
-        val recorder = createBestRecorder(minBuf)
+        val speakerActive = isSpeakerOutputActive()
+        val recorder = createBestRecorder(minBuf, speakerActive)
         if (recorder == null) {
             _state.value = VoiceEngineState.ERROR
             return
@@ -319,9 +350,16 @@ class OfflineVoiceEngine(
         routeToPreferredMic(recorder)
 
         var aec: AcousticEchoCanceler? = null
-        if (AcousticEchoCanceler.isAvailable()) {
+        if (speakerActive && AcousticEchoCanceler.isAvailable()) {
             aec = runCatching {
                 AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
+            }.getOrNull()
+        }
+
+        var ns: NoiseSuppressor? = null
+        if (speakerActive && NoiseSuppressor.isAvailable()) {
+            ns = runCatching {
+                NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
             }.getOrNull()
         }
 
@@ -331,6 +369,12 @@ class OfflineVoiceEngine(
                 AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = agcEnabled }
             }.getOrNull()
         }
+        activeAgc = agc
+
+        android.util.Log.i(
+            "OfflineVoiceEngine",
+            "Effects: speaker=$speakerActive aec=${aec?.enabled} ns=${ns?.enabled} agc=${agc?.enabled}"
+        )
 
         val recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
         val buffer = ShortArray(2048)
@@ -349,9 +393,13 @@ class OfflineVoiceEngine(
                 }
 
                 val baseGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
-                val playbackBoost = if (isMusicPlaying) 1.25f else 1.0f
-                val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackBoost)
-                    .coerceIn(0.5f, 4.0f)
+                val playbackScale = when {
+                    !isMusicPlaying -> 1.0f
+                    speakerActive -> 0.55f
+                    else -> 1.15f
+                }
+                val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackScale)
+                    .coerceIn(0.4f, 4.0f)
                 var sumSq = 0.0
                 for (i in 0 until read) {
                     val amplified = (buffer[i] * currentGain).toInt()
@@ -389,7 +437,7 @@ class OfflineVoiceEngine(
                         }
                     }
                 } else {
-val partial = extractField(recognizer.partialResult, "partial").trim().lowercase()
+                    val partial = extractField(recognizer.partialResult, "partial").trim().lowercase()
                     if (!inCommandWindow && partial.isNotEmpty()) {
                         val playing = isMusicPlaying
                         val isResume = partial == "продолжи" || partial == "продолжить"
@@ -405,9 +453,11 @@ val partial = extractField(recognizer.partialResult, "partial").trim().lowercase
         } finally {
             setBluetoothMicActive(false)
             activeRecorder = null
+            activeAgc = null
             runCatching { recorder.stop() }
             runCatching { recorder.release() }
             runCatching { aec?.release() }
+            runCatching { ns?.release() }
             runCatching { agc?.release() }
             runCatching { recognizer.close() }
             _micLevel.value = 0f
@@ -477,11 +527,20 @@ val partial = extractField(recognizer.partialResult, "partial").trim().lowercase
         Json.parseToJsonElement(jsonStr).jsonObject[field]?.jsonPrimitive?.content?.trim().orEmpty()
     }.getOrDefault("")
 
+    fun applyMicGainSettings(agc: Boolean, gainMultiplier: Float) {
+        agcEnabled = agc
+        micGainMultiplier = gainMultiplier.coerceIn(0.5f, 3.0f)
+        runCatching {
+            activeAgc?.enabled = agc
+        }
+    }
+
     companion object {
         private const val SAMPLE_RATE = 16000
         private const val COMMAND_WINDOW_MS = 8_000L
         private const val HOT_DEBOUNCE_MS = 1_500L
         private const val WAKE_DEBOUNCE_MS = 2_500L
+
         @Volatile var agcEnabled: Boolean = true
         @Volatile var micGainMultiplier: Float = 1.0f
         @Volatile var isMusicPlaying: Boolean = false
@@ -498,15 +557,4 @@ val partial = extractField(recognizer.partialResult, "partial").trim().lowercase
             "лайк", "не нравится"
         )
     }
-    fun applyMicGainSettings(agc: Boolean, gainMultiplier: Float) {
-        agcEnabled = agc
-        micGainMultiplier = gainMultiplier.coerceIn(0.5f, 3.0f)
-        runCatching {
-            val field = this.javaClass.declaredFields.firstOrNull { it.name == "agc" }
-            field?.isAccessible = true
-            val activeAgc = field?.get(this) as? AutomaticGainControl
-            activeAgc?.enabled = agc
-        }
-    }
-
 }
