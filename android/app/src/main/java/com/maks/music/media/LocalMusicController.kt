@@ -80,9 +80,6 @@ class LocalMusicController(
     @Volatile
     private var crossfadeOutTriggeredForTrackId: String? = null
 
-    // ── VISUALIZER / MUSIC ENERGY ──
-    // audioSessionId от ExoPlayer, Visualizer даёт FFT-энергию по низам.
-    // musicEnergy — 0..1, читается UI для аватара/пульсации.
     private var visualizer: android.media.audiofx.Visualizer? = null
     val musicEnergy = MutableStateFlow(0f)
 
@@ -130,11 +127,10 @@ class LocalMusicController(
         exoPlayer.addListener(playerListener)
         equalizer.attachToAudioSession(exoPlayer.audioSessionId)
 
-        // ── VISUALIZER: FFT-энергия по низам для аватара ──
         runCatching {
             visualizer?.release()
             visualizer = android.media.audiofx.Visualizer(exoPlayer.audioSessionId).apply {
-                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[0] // 128 байт — минимум нагрузки
+                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[0]
                 setDataCaptureListener(
                     object : android.media.audiofx.Visualizer.OnDataCaptureListener {
                         override fun onWaveFormDataCapture(
@@ -149,7 +145,6 @@ class LocalMusicController(
                             rate: Int,
                         ) {
                             if (fft == null || fft.size < 16) return
-                            // Берём только низкие и нижне-средние частоты (бас + ритм-секция)
                             var sum = 0f
                             for (i in 2 until 14 step 2) {
                                 val re = fft[i].toFloat()
@@ -231,7 +226,7 @@ class LocalMusicController(
     }
 
     val yandexClient = YandexMusicClient(context)
-    private val yandexBridge = YandexQueueBridge(yandexClient)
+    private val yandexBridge = YandexQueueBridge(yandexClient, waveEngine.coordinator)
     @Volatile private var isWaveMode: Boolean = false
 
     fun setYandexToken(token: String) = yandexClient.setToken(token)
@@ -253,10 +248,10 @@ class LocalMusicController(
                     if (!isWaveMode) return@launch
                     val mutable = queue.toMutableList()
                     val safeIdx = insertAt.coerceIn(0, mutable.size)
-                    // Не вставляем дубликат, если трек уже есть в очереди
                     if (mutable.any { it.id == track.id }) return@launch
                     mutable.add(safeIdx, track)
                     queue = mutable
+                    waveEngine.coordinator.registerQueueTracks(queue)
                     _uiState.update { it.copy(queue = queue) }
                 }
             },
@@ -270,10 +265,12 @@ class LocalMusicController(
         currentWaveSettings = settings
         isWaveMode = true
         yandexBridge.resetWaveSession()
+        waveEngine.coordinator.startNewWave(settings)
         val list = waveEngine.buildWaveQueue(scanner.allTracks(), settings)
         if (list.isEmpty()) return false
         _uiState.update { it.copy(waveSettings = settings) }
         startQueue(list, settings.displayLabel())
+        waveEngine.coordinator.registerQueueTracks(queue)
         triggerWavePrefetchIfNeeded()
         return true
     }
@@ -478,6 +475,7 @@ class LocalMusicController(
         val nextWave = waveEngine.buildWaveQueue(scanner.allTracks(), currentWaveSettings)
         if (nextWave.isEmpty()) return null
         startQueue(nextWave, _uiState.value.modeLabel, useFadeIn = shouldFadeIn)
+        waveEngine.coordinator.registerQueueTracks(queue)
         return currentTrack()
     }
 
@@ -765,7 +763,7 @@ class LocalMusicController(
             return
         }
 
-        waveEngine.markPlayed(track.id)
+        waveEngine.markPlayed(track)
         triggerWavePrefetchIfNeeded()
 
         val crossfadeMs = (_uiState.value.crossfadeSec * 1000f).toLong()

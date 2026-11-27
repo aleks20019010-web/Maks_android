@@ -60,15 +60,14 @@ data class WaveSettings(
 class SmartWaveEngine(
     private val memoryDb: MusicMemoryDb,
     private val random: Random = Random.Default,
+    val coordinator: WaveCoordinator = WaveCoordinator(memoryDb),
 ) {
-    private val recentlyPlayedIds = ArrayDeque<String>()
-
     fun markPlayed(trackId: String) {
-        recentlyPlayedIds.remove(trackId)
-        recentlyPlayedIds.addLast(trackId)
-        while (recentlyPlayedIds.size > RECENT_HISTORY_LIMIT) {
-            recentlyPlayedIds.removeFirst()
-        }
+        coordinator.markPlayedById(trackId)
+    }
+
+    fun markPlayed(track: LocalTrack) {
+        coordinator.markPlayed(track)
     }
 
     fun buildWaveQueue(
@@ -150,7 +149,6 @@ class SmartWaveEngine(
         // 3. Характер (Любимое / Давно не слушал / Новое)
         val now = System.currentTimeMillis()
         val weekAgo = now - 7L * 24L * 3600L * 1000L
-        val recentCooldownMs = 3L * 3600L * 1000L // не ставить трек из памяти, если звучал меньше 3 часов назад
         val charPool = when (settings.character) {
             WaveCharacter.ALL -> pool
             WaveCharacter.FAVORITES -> pool.filter { t ->
@@ -168,23 +166,15 @@ class SmartWaveEngine(
         }
         if (charPool.isNotEmpty()) pool = charPool
 
-        // Отсекаем треки из текущей сессии и треки, которые по памяти звучали совсем недавно
-        val notPlayedRecentlyInDb = if (settings.character != WaveCharacter.FAVORITES) {
-            pool.filter { t ->
-                val lastPlayed = trackStats[t.id]?.second ?: 0L
-                lastPlayed <= 0L || (now - lastPlayed) >= recentCooldownMs
-            }
-        } else {
-            pool
-        }
+        val fresh = coordinator.filterLocalCandidates(
+            candidates = pool,
+            settings = settings,
+            trackStats = trackStats,
+            blacklistedTracks = blacklistedTracks,
+            blacklistedArtists = blacklistedArtists,
+            nowMs = now,
+        ).ifEmpty { pool }
 
-        val basePool = if (notPlayedRecentlyInDb.size >= minOf(size, pool.size / 2).coerceAtLeast(1)) {
-            notPlayedRecentlyInDb
-        } else {
-            notPlayedRecentlyInDb.ifEmpty { pool }
-        }
-
-        val fresh = basePool.filter { it.id !in recentlyPlayedIds }.ifEmpty { basePool }
         val remaining = fresh.toMutableList()
         val queue = mutableListOf<LocalTrack>()
         var lastArtist = ""
@@ -196,6 +186,7 @@ class SmartWaveEngine(
             lastArtist = picked.artist.trim().lowercase()
         }
 
+        coordinator.registerQueueTracks(queue)
         return queue
     }
 
@@ -220,8 +211,6 @@ class SmartWaveEngine(
                 score *= 0.15
             }
 
-            // Мягкий антиповтор по долгой памяти: частые треки слегка притормаживаем,
-            // треки с давним прослушиванием получаем бодрее
             if (playCount > 1) {
                 score /= (1.0 + (playCount - 1) * 0.2).coerceAtMost(2.5)
             }
@@ -247,9 +236,5 @@ class SmartWaveEngine(
             if (r <= 0.0) return track
         }
         return scored.last().first
-    }
-
-    companion object {
-        private const val RECENT_HISTORY_LIMIT = 40
     }
 }
