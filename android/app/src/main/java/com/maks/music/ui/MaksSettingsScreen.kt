@@ -170,7 +170,6 @@ internal fun MaksSettingsScreen(
                     fontSize = 12.sp,
                 )
             }
-        }
 
         Column(
             modifier = Modifier
