@@ -139,10 +139,416 @@ class YandexMusicClient(context: Context) {
         return File(cacheDir, "$safeArtist - $safeTitle [${meta.id}].mp3")
     }
 
+
+    data class LocalIndexEntry(
+        val trackId: String,
+        val artist: String,
+        val title: String,
+        val album: String,
+        val fileName: String,
+        val docUri: String = "",
+        val sizeBytes: Long = 0L,
+    )
+
+    private val indexLock = Any()
+    private val localIndexMap = LinkedHashMap<String, LocalIndexEntry>()
+    @Volatile private var localIndexLoaded = false
+
+    private fun fallbackPublicIndexFile(): File {
+        val baseDir = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_MUSIC
+        )
+        return File(File(baseDir, "Maks"), "local_index.json")
+    }
+
+    private fun findSelectedFolderIndexUri(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        rootDocUri: android.net.Uri,
+    ): android.net.Uri? {
+        val rootDocId = android.provider.DocumentsContract.getDocumentId(rootDocUri)
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootDocId)
+        return runCatching {
+            resolver.query(
+                childrenUri,
+                arrayOf(
+                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                    if (name == "local_index.json" && idIdx >= 0) {
+                        val docId = cursor.getString(idIdx)
+                        if (!docId.isNullOrBlank()) {
+                            return@use android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        }
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+    }
+
+    private fun serializeIndexJson(entries: Collection<LocalIndexEntry>): String {
+        val arr = org.json.JSONArray()
+        for (e in entries) {
+            val obj = org.json.JSONObject().apply {
+                put("trackId", e.trackId)
+                put("artist", e.artist)
+                put("title", e.title)
+                put("album", e.album)
+                put("fileName", e.fileName)
+                put("docUri", e.docUri)
+                put("sizeBytes", e.sizeBytes)
+            }
+            arr.put(obj)
+        }
+        return arr.toString(2)
+    }
+
+    private fun parseIndexJson(raw: String): List<LocalIndexEntry> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            val result = ArrayList<LocalIndexEntry>(arr.length())
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val id = obj.optString("trackId").trim()
+                if (id.isEmpty()) continue
+                result += LocalIndexEntry(
+                    trackId = id,
+                    artist = obj.optString("artist"),
+                    title = obj.optString("title"),
+                    album = obj.optString("album"),
+                    fileName = obj.optString("fileName"),
+                    docUri = obj.optString("docUri"),
+                    sizeBytes = obj.optLong("sizeBytes", 0L),
+                )
+            }
+            result
+        }.getOrDefault(emptyList())
+    }
+
+    fun ensureLocalIndexLoaded(forceRescanIfMissing: Boolean = true) {
+        if (localIndexLoaded) return
+        synchronized(indexLock) {
+            if (localIndexLoaded) return
+            val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+            var loadedEntries: List<LocalIndexEntry> = emptyList()
+
+            if (uriStr.isNotBlank()) {
+                runCatching {
+                    val treeUri = android.net.Uri.parse(uriStr)
+                    val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+                    val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
+                    val resolver = appContext.contentResolver
+                    val indexUri = findSelectedFolderIndexUri(resolver, treeUri, rootDocUri)
+                    if (indexUri != null) {
+                        val text = resolver.openInputStream(indexUri)?.use { inp ->
+                            inp.bufferedReader(Charsets.UTF_8).readText()
+                        }.orEmpty()
+                        loadedEntries = parseIndexJson(text)
+                    }
+                }
+            }
+
+            if (loadedEntries.isEmpty()) {
+                val fb = fallbackPublicIndexFile()
+                if (fb.exists() && fb.isFile) {
+                    loadedEntries = parseIndexJson(runCatching { fb.readText(Charsets.UTF_8) }.getOrDefault(""))
+                }
+            }
+
+            localIndexMap.clear()
+            for (entry in loadedEntries) {
+                localIndexMap[entry.trackId] = entry
+            }
+
+            if (localIndexMap.isEmpty() && forceRescanIfMissing) {
+                scanAndRebuildIndexLocked()
+            }
+            localIndexLoaded = true
+        }
+    }
+
+    private fun scanAndRebuildIndexLocked() {
+        val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+        if (uriStr.isBlank()) return
+        runCatching {
+            val treeUri = android.net.Uri.parse(uriStr)
+            val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val resolver = appContext.contentResolver
+            collectIndexedTracksRecursive(resolver, treeUri, rootDocId, "", "", 0, 3)
+            persistLocalIndexLocked()
+        }
+    }
+
+    private fun collectIndexedTracksRecursive(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        parentDocId: String,
+        artistHint: String,
+        albumHint: String,
+        depth: Int,
+        maxDepth: Int,
+    ) {
+        if (depth > maxDepth) return
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        resolver.query(
+            childrenUri,
+            arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                android.provider.DocumentsContract.Document.COLUMN_SIZE,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+            val dirs = mutableListOf<Pair<String, String>>()
+            while (cursor.moveToNext()) {
+                val docId = if (idIdx >= 0) cursor.getString(idIdx) else null
+                if (docId.isNullOrBlank()) continue
+                val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx).orEmpty() else ""
+                if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (depth < maxDepth) dirs += (docId to name)
+                } else {
+                    val size = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else 0L
+                    val openBracket = name.lastIndexOf('[')
+                    val closeBracket = name.lastIndexOf(']')
+                    if (openBracket >= 0 && closeBracket > openBracket + 1 && name.endsWith(".mp3", ignoreCase = true)) {
+                        val trackId = name.substring(openBracket + 1, closeBracket).trim()
+                        if (trackId.isNotEmpty() && size > 16_384L) {
+                            val titlePart = name.substring(0, openBracket).trim()
+                            val parts = titlePart.split(" - ", limit = 2)
+                            val parsedArtist = if (parts.size == 2) parts[0].trim() else artistHint
+                            val parsedTitle = if (parts.size == 2) parts[1].trim() else titlePart
+                            val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString()
+                            localIndexMap[trackId] = LocalIndexEntry(
+                                trackId = trackId,
+                                artist = parsedArtist.ifBlank { artistHint },
+                                title = parsedTitle,
+                                album = albumHint,
+                                fileName = name,
+                                docUri = docUri,
+                                sizeBytes = size,
+                            )
+                        }
+                    }
+                }
+            }
+            for ((dirId, dirName) in dirs) {
+                val nextArtist = if (depth == 0) dirName else artistHint
+                val nextAlbum = if (depth == 1) dirName else albumHint
+                collectIndexedTracksRecursive(resolver, treeUri, dirId, nextArtist, nextAlbum, depth + 1, maxDepth)
+            }
+        }
+    }
+
+    private fun persistLocalIndexLocked() {
+        val jsonText = serializeIndexJson(localIndexMap.values)
+        val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+        if (uriStr.isNotBlank()) {
+            runCatching {
+                val treeUri = android.net.Uri.parse(uriStr)
+                val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+                val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
+                val resolver = appContext.contentResolver
+                val existingUri = findSelectedFolderIndexUri(resolver, treeUri, rootDocUri)
+                    ?: android.provider.DocumentsContract.createDocument(
+                        resolver,
+                        rootDocUri,
+                        "application/json",
+                        "local_index.json",
+                    )
+                if (existingUri != null) {
+                    resolver.openOutputStream(existingUri, "wt")?.use { out ->
+                        out.write(jsonText.toByteArray(Charsets.UTF_8))
+                    }
+                }
+            }
+        }
+        runCatching {
+            val fb = fallbackPublicIndexFile()
+            fb.parentFile?.mkdirs()
+            fb.writeText(jsonText, Charsets.UTF_8)
+        }
+    }
+
+    fun recordTrackInLocalIndex(meta: YandexTrackMeta, fileName: String, docUri: String = "", sizeBytes: Long = 0L) {
+        synchronized(indexLock) {
+            localIndexLoaded = true
+            localIndexMap[meta.id] = LocalIndexEntry(
+                trackId = meta.id,
+                artist = meta.artist,
+                title = meta.title,
+                album = meta.album,
+                fileName = fileName,
+                docUri = docUri,
+                sizeBytes = sizeBytes,
+            )
+            persistLocalIndexLocked()
+        }
+    }
+
     fun findCachedFile(trackId: String): File? {
         val suffix = "[$trackId].mp3"
-        return cacheDir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(suffix) && it.length() > 16_384 }
+        cacheDir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(suffix) && it.length() > 16_384 }?.let {
+            return it
+        }
+        ensureLocalIndexLoaded(forceRescanIfMissing = false)
+        val indexed = synchronized(indexLock) { localIndexMap[trackId] }
+        if (indexed != null && indexed.docUri.isNotBlank()) {
+            val restored = restoreFromDocUri(trackId, android.net.Uri.parse(indexed.docUri), indexed.fileName)
+            if (restored != null) return restored
+        }
+        return restoreFromSelectedFolder(trackId)
     }
+
+    private fun restoreFromDocUri(trackId: String, docUri: android.net.Uri, preferredName: String): File? {
+        val suffix = "[$trackId].mp3"
+        return runCatching {
+            val resolver = appContext.contentResolver
+            val cleanName = preferredName.ifBlank {
+                queryDisplayName(resolver, docUri)?.takeIf { it.isNotBlank() } ?: "yandex_track_$suffix"
+            }.let { if (it.endsWith(".mp3", ignoreCase = true)) it else "$it.mp3" }
+            val outFile = File(cacheDir, sanitizeFileName(cleanName).ifBlank { "track_$suffix" })
+            val tmpFile = File(cacheDir, "${outFile.name}.restore_tmp")
+            resolver.openInputStream(docUri)?.use { inp ->
+                tmpFile.outputStream().use { out -> inp.copyTo(out, bufferSize = 16 * 1024) }
+            } ?: return@runCatching null
+            if (tmpFile.length() < 16_384L) {
+                tmpFile.delete()
+                return@runCatching null
+            }
+            if (outFile.exists()) outFile.delete()
+            if (!tmpFile.renameTo(outFile)) {
+                tmpFile.copyTo(outFile, overwrite = true)
+                tmpFile.delete()
+            }
+            outFile.takeIf { it.exists() && it.length() > 16_384L }
+        }.getOrNull()
+    }
+
+    private fun restoreFromSelectedFolder(trackId: String): File? {
+        val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+        if (uriStr.isBlank() || trackId.isBlank()) return null
+        val suffix = "[$trackId].mp3"
+        return runCatching {
+            val treeUri = android.net.Uri.parse(uriStr)
+            val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val resolver = appContext.contentResolver
+            val matchedUri = findTrackUriRecursive(
+                resolver = resolver,
+                treeUri = treeUri,
+                parentDocId = rootDocId,
+                suffix = suffix,
+                depth = 0,
+                maxDepth = 3,
+            ) ?: return@runCatching null
+
+            val displayName = queryDisplayName(resolver, matchedUri)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { if (it.endsWith(".mp3", ignoreCase = true)) it else "$it.mp3" }
+                ?: "yandex_track_$suffix"
+
+            val outFile = File(cacheDir, sanitizeFileName(displayName).ifBlank { "track_$suffix" })
+            val tmpFile = File(cacheDir, "${outFile.name}.restore_tmp")
+            resolver.openInputStream(matchedUri)?.use { inp ->
+                tmpFile.outputStream().use { out ->
+                    inp.copyTo(out, bufferSize = 16 * 1024)
+                }
+            } ?: return@runCatching null
+
+            if (tmpFile.length() < 16_384L) {
+                tmpFile.delete()
+                return@runCatching null
+            }
+            if (outFile.exists()) outFile.delete()
+            if (!tmpFile.renameTo(outFile)) {
+                tmpFile.copyTo(outFile, overwrite = true)
+                tmpFile.delete()
+            }
+            outFile.takeIf { it.exists() && it.length() > 16_384L }
+        }.getOrNull()
+    }
+
+    private fun findTrackUriRecursive(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        parentDocId: String,
+        suffix: String,
+        depth: Int,
+        maxDepth: Int,
+    ): android.net.Uri? {
+        if (depth > maxDepth) return null
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val subDirs = mutableListOf<String>()
+        resolver.query(
+            childrenUri,
+            arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                android.provider.DocumentsContract.Document.COLUMN_SIZE,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+            while (cursor.moveToNext()) {
+                val docId = if (idIdx >= 0) cursor.getString(idIdx) else null
+                if (docId.isNullOrBlank()) continue
+                val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx).orEmpty() else ""
+                if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (depth < maxDepth) subDirs += docId
+                } else {
+                    val size = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else 17_000L
+                    if (name.endsWith(suffix, ignoreCase = true) && size > 16_384L) {
+                        return android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                    }
+                }
+            }
+        }
+        for (dirId in subDirs) {
+            val found = findTrackUriRecursive(resolver, treeUri, dirId, suffix, depth + 1, maxDepth)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun queryDisplayName(
+        resolver: android.content.ContentResolver,
+        docUri: android.net.Uri,
+    ): String? = runCatching {
+        resolver.query(
+            docUri,
+            arrayOf(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            if (cursor.moveToFirst() && idx >= 0) cursor.getString(idx) else null
+        }
+    }.getOrNull()
 
     suspend fun fetchGenreTracks(genreSlug: String): List<YandexTrackMeta> {
         val clean = genreSlug.trim().lowercase().removePrefix("genre:")
@@ -226,7 +632,7 @@ class YandexMusicClient(context: Context) {
                 tmp.copyTo(target, overwrite = true)
                 tmp.delete()
             }
-            exportToSelectedFolder(target)
+            exportToSelectedFolder(target, meta)
             markOk()
             enforceCacheLimit()
             Log.i(TAG, "Downloaded: ${target.name} (${target.length() / 1024} KB)")
@@ -356,26 +762,167 @@ class YandexMusicClient(context: Context) {
         private const val MAX_FAILS = 3
         private const val BLOCK_DURATION_MS = 5 * 60 * 1000L
     }
-    private fun exportToSelectedFolder(sourceFile: File) {
+        private fun normalizeDirKey(raw: String): String =
+        raw.lowercase()
+            .replace('?', '?')
+            .replace(Regex("[\_\-+\s.]+"), " ")
+            .trim()
+
+    private fun findExistingSafDir(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        parentDocUri: android.net.Uri,
+        candidateNames: List<String>,
+    ): android.net.Uri? {
+        val cleanCandidates = candidateNames
+            .map { sanitizeFileName(it) }
+            .filter { it.isNotBlank() }
+        if (cleanCandidates.isEmpty()) return null
+
+        val normCandidates = cleanCandidates.map { normalizeDirKey(it) }.toSet()
+        val parentDocId = android.provider.DocumentsContract.getDocumentId(parentDocUri)
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+
+        val existingId = runCatching {
+            resolver.query(
+                childrenUri,
+                arrayOf(
+                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                var fuzzyMatchId: String? = null
+                while (cursor.moveToNext()) {
+                    val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty().trim() else ""
+                    val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx).orEmpty() else ""
+                    if (mime != android.provider.DocumentsContract.Document.MIME_TYPE_DIR || idIdx < 0) continue
+                    val docId = cursor.getString(idIdx) ?: continue
+                    if (cleanCandidates.any { it.equals(name, ignoreCase = true) }) {
+                        return@use docId
+                    }
+                    if (fuzzyMatchId == null && normalizeDirKey(name) in normCandidates) {
+                        fuzzyMatchId = docId
+                    }
+                }
+                fuzzyMatchId
+            }
+        }.getOrNull()
+
+        return existingId?.takeIf { it.isNotBlank() }?.let {
+            android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, it)
+        }
+    }
+
+    private fun findOrCreateSafDir(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        parentDocUri: android.net.Uri,
+        displayName: String,
+        extraCandidates: List<String> = emptyList(),
+    ): android.net.Uri? {
+        val cleanName = sanitizeFileName(displayName).ifBlank { "Unknown" }
+        val existing = findExistingSafDir(
+            resolver = resolver,
+            treeUri = treeUri,
+            parentDocUri = parentDocUri,
+            candidateNames = listOf(cleanName) + extraCandidates,
+        )
+        if (existing != null) return existing
+        return android.provider.DocumentsContract.createDocument(
+            resolver,
+            parentDocUri,
+            android.provider.DocumentsContract.Document.MIME_TYPE_DIR,
+            cleanName,
+        )
+    }
+
+    private fun findExistingSafFile(
+        resolver: android.content.ContentResolver,
+        treeUri: android.net.Uri,
+        parentDocUri: android.net.Uri,
+        displayName: String,
+    ): android.net.Uri? {
+        val parentDocId = android.provider.DocumentsContract.getDocumentId(parentDocUri)
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val existingId = runCatching {
+            resolver.query(
+                childrenUri,
+                arrayOf(
+                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                    if (name == displayName || name == "$displayName.mp3") {
+                        if (idIdx >= 0) return@use cursor.getString(idIdx)
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+        return existingId?.takeIf { it.isNotBlank() }?.let {
+            android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, it)
+        }
+    }
+
+    private fun exportToSelectedFolder(sourceFile: File, meta: YandexTrackMeta) {
         val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
         if (uriStr.isBlank() || !sourceFile.exists()) return
         runCatching {
             val treeUri = android.net.Uri.parse(uriStr)
-            val docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
-            val parentDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+            val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
             val resolver = appContext.contentResolver
-            val outUri = android.provider.DocumentsContract.createDocument(
-                resolver,
-                parentDocUri,
-                "audio/mpeg",
-                sourceFile.nameWithoutExtension
-            ) ?: return
+
+            val rawArtist = meta.artist.ifBlank { "??????????? ???????????" }
+            val primaryArtist = rawArtist.split(",").firstOrNull()?.trim().orEmpty()
+            val artistDir = findOrCreateSafDir(
+                resolver = resolver,
+                treeUri = treeUri,
+                parentDocUri = rootDocUri,
+                displayName = primaryArtist.ifBlank { rawArtist },
+                extraCandidates = listOf(rawArtist),
+            ) ?: rootDocUri
+
+            val albumDir = findOrCreateSafDir(
+                resolver = resolver,
+                treeUri = treeUri,
+                parentDocUri = artistDir,
+                displayName = meta.album.ifBlank { "??? ???????" },
+            ) ?: artistDir
+
+            val baseName = sourceFile.nameWithoutExtension
+            val outUri = findExistingSafFile(resolver, treeUri, albumDir, baseName)
+                ?: android.provider.DocumentsContract.createDocument(
+                    resolver,
+                    albumDir,
+                    "audio/mpeg",
+                    baseName,
+                ) ?: return
+
             resolver.openOutputStream(outUri, "wt")?.use { out ->
                 sourceFile.inputStream().use { inp -> inp.copyTo(out) }
             }
+            recordTrackInLocalIndex(
+                meta = meta,
+                fileName = sourceFile.name,
+                docUri = outUri.toString(),
+                sizeBytes = sourceFile.length(),
+            )
         }.onFailure {
             android.util.Log.w(TAG, "exportToSelectedFolder failed: ${it.message}")
         }
     }
-
-}
