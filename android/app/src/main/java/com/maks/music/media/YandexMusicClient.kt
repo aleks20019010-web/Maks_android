@@ -9,11 +9,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -92,16 +92,16 @@ class YandexMusicClient(context: Context) {
     }
 
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
-        if (!isConfigured()) return@withContext Result.failure(IllegalStateException("????? ?? ?????"))
+        if (!isConfigured()) return@withContext Result.failure(IllegalStateException("Токен не задан"))
         resetCircuitBreaker()
         val body = httpGet("$BASE_URL/account/status")
-            ?: return@withContext Result.failure(IllegalStateException("??? ?????? ?? ?????? ??????"))
+            ?: return@withContext Result.failure(IllegalStateException("Нет ответа от сервера Яндекса"))
         runCatching {
             val root = json.parseToJsonElement(body).jsonObject
             val account = root["result"]?.jsonObject?.get("account")?.jsonObject
             val login = account?.get("displayName")?.jsonPrimitive?.content
                 ?: account?.get("login")?.jsonPrimitive?.content
-                ?: "??????? ???????????"
+                ?: "Неизвестный пользователь"
             login
         }
     }
@@ -139,7 +139,6 @@ class YandexMusicClient(context: Context) {
         return File(cacheDir, "$safeArtist - $safeTitle [${meta.id}].mp3")
     }
 
-
     data class LocalIndexEntry(
         val trackId: String,
         val artist: String,
@@ -152,7 +151,15 @@ class YandexMusicClient(context: Context) {
 
     private val indexLock = Any()
     private val localIndexMap = LinkedHashMap<String, LocalIndexEntry>()
-    @Volatile private var localIndexLoaded = false
+
+    private fun normalizeSearchKey(raw: String): String =
+        raw.lowercase()
+            .replace('\u0451', '\u0435')
+            .replace(Regex("[^a-zA-Zа-яА-Я0-9]+"), " ")
+            .trim()
+            .replace(Regex("\\s+"), " ")
+
+    private fun internalIndexFile(): File = File(appContext.filesDir, "local_index.json")
 
     private fun fallbackPublicIndexFile(): File {
         val baseDir = android.os.Environment.getExternalStoragePublicDirectory(
@@ -235,25 +242,30 @@ class YandexMusicClient(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun ensureLocalIndexLoaded(forceRescanIfMissing: Boolean = true) {
-        if (localIndexLoaded) return
+    fun reloadLocalIndexFromFile(): List<LocalIndexEntry> {
         synchronized(indexLock) {
-            if (localIndexLoaded) return
-            val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
             var loadedEntries: List<LocalIndexEntry> = emptyList()
 
-            if (uriStr.isNotBlank()) {
-                runCatching {
-                    val treeUri = android.net.Uri.parse(uriStr)
-                    val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
-                    val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
-                    val resolver = appContext.contentResolver
-                    val indexUri = findSelectedFolderIndexUri(resolver, treeUri, rootDocUri)
-                    if (indexUri != null) {
-                        val text = resolver.openInputStream(indexUri)?.use { inp ->
-                            inp.bufferedReader(Charsets.UTF_8).readText()
-                        }.orEmpty()
-                        loadedEntries = parseIndexJson(text)
+            val internal = internalIndexFile()
+            if (internal.exists() && internal.isFile) {
+                loadedEntries = parseIndexJson(runCatching { internal.readText(Charsets.UTF_8) }.getOrDefault(""))
+            }
+
+            if (loadedEntries.isEmpty()) {
+                val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+                if (uriStr.isNotBlank()) {
+                    runCatching {
+                        val treeUri = android.net.Uri.parse(uriStr)
+                        val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+                        val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
+                        val resolver = appContext.contentResolver
+                        val indexUri = findSelectedFolderIndexUri(resolver, treeUri, rootDocUri)
+                        if (indexUri != null) {
+                            val text = resolver.openInputStream(indexUri)?.use { inp ->
+                                inp.bufferedReader(Charsets.UTF_8).readText()
+                            }.orEmpty()
+                            loadedEntries = parseIndexJson(text)
+                        }
                     }
                 }
             }
@@ -269,96 +281,84 @@ class YandexMusicClient(context: Context) {
             for (entry in loadedEntries) {
                 localIndexMap[entry.trackId] = entry
             }
-
-            if (localIndexMap.isEmpty() && forceRescanIfMissing) {
-                scanAndRebuildIndexLocked()
-            }
-            localIndexLoaded = true
+            return loadedEntries
         }
     }
 
-    private fun scanAndRebuildIndexLocked() {
-        val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
-        if (uriStr.isBlank()) return
-        runCatching {
-            val treeUri = android.net.Uri.parse(uriStr)
-            val rootDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
-            val resolver = appContext.contentResolver
-            collectIndexedTracksRecursive(resolver, treeUri, rootDocId, "", "", 0, 3)
-            persistLocalIndexLocked()
+    fun isTrackInLocalIndex(meta: YandexTrackMeta): Boolean {
+        reloadLocalIndexFromFile()
+        val entries = synchronized(indexLock) { localIndexMap.values.toList() }
+        if (entries.isEmpty()) return false
+
+        if (entries.any { it.trackId == meta.id }) return true
+
+        val normTitle = normalizeSearchKey(meta.title)
+        val normArtist = normalizeSearchKey(meta.artist)
+        if (normTitle.isBlank()) return false
+
+        return entries.any { entry ->
+            val eTitle = normalizeSearchKey(entry.title)
+            val eArtist = normalizeSearchKey(entry.artist)
+            val eFile = normalizeSearchKey(entry.fileName)
+            val titleMatch = eTitle == normTitle || eTitle.contains(normTitle) || eFile.contains(normTitle)
+            val artistMatch = normArtist.isBlank() || eArtist.contains(normArtist) || eFile.contains(normArtist)
+            titleMatch && artistMatch
         }
     }
 
-    private fun collectIndexedTracksRecursive(
-        resolver: android.content.ContentResolver,
-        treeUri: android.net.Uri,
-        parentDocId: String,
-        artistHint: String,
-        albumHint: String,
-        depth: Int,
-        maxDepth: Int,
-    ) {
-        if (depth > maxDepth) return
-        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
-        resolver.query(
-            childrenUri,
-            arrayOf(
-                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
-                android.provider.DocumentsContract.Document.COLUMN_SIZE,
-            ),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
-            val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
-            val dirs = mutableListOf<Pair<String, String>>()
-            while (cursor.moveToNext()) {
-                val docId = if (idIdx >= 0) cursor.getString(idIdx) else null
-                if (docId.isNullOrBlank()) continue
-                val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
-                val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx).orEmpty() else ""
-                if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
-                    if (depth < maxDepth) dirs += (docId to name)
-                } else {
-                    val size = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else 0L
-                    val openBracket = name.lastIndexOf('[')
-                    val closeBracket = name.lastIndexOf(']')
-                    if (openBracket >= 0 && closeBracket > openBracket + 1 && name.endsWith(".mp3", ignoreCase = true)) {
-                        val trackId = name.substring(openBracket + 1, closeBracket).trim()
-                        if (trackId.isNotEmpty() && size > 16_384L) {
-                            val titlePart = name.substring(0, openBracket).trim()
-                            val parts = titlePart.split(" - ", limit = 2)
-                            val parsedArtist = if (parts.size == 2) parts[0].trim() else artistHint
-                            val parsedTitle = if (parts.size == 2) parts[1].trim() else titlePart
-                            val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString()
-                            localIndexMap[trackId] = LocalIndexEntry(
-                                trackId = trackId,
-                                artist = parsedArtist.ifBlank { artistHint },
-                                title = parsedTitle,
-                                album = albumHint,
-                                fileName = name,
-                                docUri = docUri,
-                                sizeBytes = size,
-                            )
-                        }
-                    }
-                }
+    private fun entryToLocalTrack(entry: LocalIndexEntry): LocalTrack? {
+        val uri = when {
+            entry.docUri.isNotBlank() -> android.net.Uri.parse(entry.docUri)
+            else -> {
+                val localFile = findCachedFile(entry.trackId) ?: return null
+                android.net.Uri.fromFile(localFile)
             }
-            for ((dirId, dirName) in dirs) {
-                val nextArtist = if (depth == 0) dirName else artistHint
-                val nextAlbum = if (depth == 1) dirName else albumHint
-                collectIndexedTracksRecursive(resolver, treeUri, dirId, nextArtist, nextAlbum, depth + 1, maxDepth)
+        }
+        return LocalTrack(
+            id = entry.trackId.hashCode().toLong().coerceAtLeast(1L),
+            title = entry.title.ifBlank { entry.fileName.substringBeforeLast('.') },
+            artist = entry.artist.ifBlank { "Неизвестный исполнитель" },
+            album = entry.album,
+            durationMs = 0L,
+            contentUri = uri,
+            dataPath = entry.fileName,
+        )
+    }
+
+    fun findLocalTracksByArtist(artistQuery: String): List<LocalTrack> {
+        val normArtist = normalizeSearchKey(artistQuery)
+        if (normArtist.isBlank()) return emptyList()
+        val entries = reloadLocalIndexFromFile()
+        return entries.mapNotNull { entry ->
+            val eArtist = normalizeSearchKey(entry.artist)
+            val eFile = normalizeSearchKey(entry.fileName)
+            if (eArtist == normArtist || eArtist.contains(normArtist) || eFile.contains(normArtist)) {
+                entryToLocalTrack(entry)
+            } else {
+                null
+            }
+        }
+    }
+
+    fun findLocalTracksByQuery(query: String): List<LocalTrack> {
+        val words = normalizeSearchKey(query).split(" ").filter { it.isNotBlank() }
+        if (words.isEmpty()) return emptyList()
+        val entries = reloadLocalIndexFromFile()
+        return entries.mapNotNull { entry ->
+            val hay = normalizeSearchKey("${entry.artist} ${entry.title} ${entry.fileName}")
+            if (words.all { w -> hay.contains(w) }) {
+                entryToLocalTrack(entry)
+            } else {
+                null
             }
         }
     }
 
     private fun persistLocalIndexLocked() {
         val jsonText = serializeIndexJson(localIndexMap.values)
+        runCatching {
+            internalIndexFile().writeText(jsonText, Charsets.UTF_8)
+        }
         val uriStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
         if (uriStr.isNotBlank()) {
             runCatching {
@@ -389,7 +389,6 @@ class YandexMusicClient(context: Context) {
 
     fun recordTrackInLocalIndex(meta: YandexTrackMeta, fileName: String, docUri: String = "", sizeBytes: Long = 0L) {
         synchronized(indexLock) {
-            localIndexLoaded = true
             localIndexMap[meta.id] = LocalIndexEntry(
                 trackId = meta.id,
                 artist = meta.artist,
@@ -408,7 +407,7 @@ class YandexMusicClient(context: Context) {
         cacheDir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(suffix) && it.length() > 16_384 }?.let {
             return it
         }
-        ensureLocalIndexLoaded(forceRescanIfMissing = false)
+        reloadLocalIndexFromFile()
         val indexed = synchronized(indexLock) { localIndexMap[trackId] }
         if (indexed != null && indexed.docUri.isNotBlank()) {
             val restored = restoreFromDocUri(trackId, android.net.Uri.parse(indexed.docUri), indexed.fileName)
@@ -595,6 +594,11 @@ class YandexMusicClient(context: Context) {
         val existing = findCachedFile(meta.id) ?: cachedFileFor(meta).takeIf { it.exists() && it.length() > 16_384 }
         if (existing != null) return@withContext existing
 
+        if (isTrackInLocalIndex(meta)) {
+            Log.d(TAG, "Skip download, already in local_index.json: ${meta.artist} - ${meta.title}")
+            return@withContext null
+        }
+
         if (!isConfigured() || isTemporarilyDown() || !isNetworkAllowed()) return@withContext null
 
         val directUrl = resolveDirectDownloadUrl(meta.id) ?: return@withContext null
@@ -764,11 +768,11 @@ class YandexMusicClient(context: Context) {
         private const val MAX_FAILS = 3
         private const val BLOCK_DURATION_MS = 5 * 60 * 1000L
     }
-            private fun normalizeDirKey(raw: String): String =
+
+    private fun normalizeDirKey(raw: String): String =
         raw.lowercase()
             .replace('\u0451', '\u0435')
             .replace(Regex("[^" + "a-zA-Z\u0410-\u044f0-9]+"), " ")
-            .trim()
             .trim()
 
     private fun findExistingSafDir(
@@ -890,7 +894,7 @@ class YandexMusicClient(context: Context) {
             val rootDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
             val resolver = appContext.contentResolver
 
-            val rawArtist = meta.artist.ifBlank { "??????????? ???????????" }
+            val rawArtist = meta.artist.ifBlank { "Неизвестный исполнитель" }
             val primaryArtist = rawArtist.split(",").firstOrNull()?.trim().orEmpty()
             val artistDir = findOrCreateSafDir(
                 resolver = resolver,
@@ -904,7 +908,7 @@ class YandexMusicClient(context: Context) {
                 resolver = resolver,
                 treeUri = treeUri,
                 parentDocUri = artistDir,
-                displayName = meta.album.ifBlank { "??? ???????" },
+                displayName = meta.album.ifBlank { "Без альбома" },
             ) ?: artistDir
 
             val baseName = sourceFile.nameWithoutExtension

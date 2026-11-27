@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.LruCache
@@ -18,6 +19,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
 
 class LocalLibraryScanner(
     private val context: Context,
@@ -25,6 +30,8 @@ class LocalLibraryScanner(
 ) : LocalCatalogLookup {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val settingsPrefs = context.getSharedPreferences("maks_settings", Context.MODE_PRIVATE)
+    private val indexWriteLock = Any()
 
     // Кэш миниатюр обложек (до ~16 МБ) для плавной отрисовки в списках Медиатеки и Очереди
     private val thumbnailCache = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
@@ -89,8 +96,7 @@ class LocalLibraryScanner(
     }
 
     private fun minDurationMs(): Long =
-        context.getSharedPreferences("maks_settings", Context.MODE_PRIVATE)
-            .getInt("ignore_short_tracks_sec", 30)
+        settingsPrefs.getInt("ignore_short_tracks_sec", 30)
             .coerceAtLeast(0) * 1000L
 
     fun scan(): List<LocalTrack> {
@@ -103,7 +109,109 @@ class LocalLibraryScanner(
 
         result.sortWith(compareBy<LocalTrack>({ it.artist.lowercase() }, { it.title.lowercase() }))
         rebuildIndexes(result)
+        writeIndexFile(result)
         return result
+    }
+
+    fun writeIndexFile(sourceTracks: List<LocalTrack> = tracks) {
+        synchronized(indexWriteLock) {
+            val payload = buildIndexJson(sourceTracks)
+            runCatching {
+                val internalFile = File(context.filesDir, INDEX_FILE_NAME)
+                internalFile.writeText(payload, Charsets.UTF_8)
+            }
+            runCatching {
+                val publicDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "Maks",
+                )
+                publicDir.mkdirs()
+                File(publicDir, INDEX_FILE_NAME).writeText(payload, Charsets.UTF_8)
+            }
+            val downloadTreeStr = settingsPrefs.getString("yandex_download_dir_uri", "").orEmpty().trim()
+            if (downloadTreeStr.isNotBlank()) {
+                runCatching {
+                    val treeUri = Uri.parse(downloadTreeStr)
+                    val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+                    val rootDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
+                    val existingUri = findIndexDocUri(treeUri, rootDocId)
+                        ?: DocumentsContract.createDocument(
+                            context.contentResolver,
+                            rootDocUri,
+                            "application/json",
+                            INDEX_FILE_NAME,
+                        )
+                    if (existingUri != null) {
+                        context.contentResolver.openOutputStream(existingUri, "wt")?.use { out ->
+                            out.write(payload.toByteArray(Charsets.UTF_8))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun findIndexDocUri(treeUri: Uri, parentDocId: String): Uri? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        return runCatching {
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                    if (name == INDEX_FILE_NAME && idIdx >= 0) {
+                        val docId = cursor.getString(idIdx)
+                        if (!docId.isNullOrBlank()) {
+                            return@use DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        }
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+    }
+
+    private fun buildIndexJson(sourceTracks: List<LocalTrack>): String {
+        val arr = JSONArray()
+        for (track in sourceTracks) {
+            val extractedId = extractBracketId(track.displayName)
+                ?: track.id.takeIf { it.isNotBlank() }
+                ?: "local_${md5("${track.artist}|${track.title}|${track.displayName}").take(12)}"
+            val obj = JSONObject().apply {
+                put("trackId", extractedId)
+                put("artist", track.artist)
+                put("title", track.title)
+                put("album", track.album)
+                put("fileName", track.displayName)
+                put("docUri", track.contentUri.toString())
+                put("sizeBytes", 0L)
+            }
+            arr.put(obj)
+        }
+        return arr.toString(2)
+    }
+
+    private fun extractBracketId(fileName: String): String? {
+        val open = fileName.lastIndexOf('[')
+        val close = fileName.lastIndexOf(']')
+        if (open >= 0 && close > open + 1) {
+            return fileName.substring(open + 1, close).trim().takeIf { it.isNotEmpty() }
+        }
+        return null
+    }
+
+    private fun md5(input: String): String {
+        val digest = MessageDigest.getInstance("MD5").digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     private fun scanMediaStore(result: MutableList<LocalTrack>, seenKeys: MutableSet<String>) {
@@ -326,6 +434,7 @@ class LocalLibraryScanner(
     private companion object {
         const val PREFS_NAME = "maks_music_library_prefs"
         const val KEY_FOLDERS = "saf_folder_uris"
+        const val INDEX_FILE_NAME = "local_index.json"
         val AUDIO_EXTENSIONS = setOf("mp3", "flac", "m4a", "ogg", "wav", "opus", "aac", "wma", "alac")
         val IGNORED_PATH_HINTS = listOf(
             "ringtones/", "notifications/", "alarms/",

@@ -253,7 +253,7 @@ class LocalMusicController(
                     if (!isWaveMode) return@launch
                     val mutable = queue.toMutableList()
                     val safeIdx = insertAt.coerceIn(0, mutable.size)
-                    // ?? ????????? ????????, ???? ???? ???? ??? ? ????????? ???????
+                    // Не вставляем дубликат, если трек уже есть в очереди
                     if (mutable.any { it.id == track.id }) return@launch
                     mutable.add(safeIdx, track)
                     queue = mutable
@@ -281,7 +281,13 @@ class LocalMusicController(
     fun playArtist(artist: String): Boolean {
         isWaveMode = false
         yandexBridge.resetWaveSession()
-        var list = scanner.findByArtist(artist, memoryDb.getBlacklistedTrackIds())
+        val blacklisted = memoryDb.getBlacklistedTrackIds()
+        var list = scanner.findByArtist(artist, blacklisted)
+        if (list.isEmpty()) {
+            list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                yandexClient.findLocalTracksByArtist(artist)
+            }
+        }
         if (list.isEmpty() && yandexClient.isConfigured() && !yandexClient.isTemporarilyDown()) {
             list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
                 kotlinx.coroutines.withTimeoutOrNull(10_000L) {
@@ -312,7 +318,13 @@ class LocalMusicController(
     fun playSearch(query: String): LocalTrack? {
         isWaveMode = false
         yandexBridge.resetWaveSession()
-        var list = scanner.searchLocal(query, memoryDb.getBlacklistedTrackIds())
+        val blacklisted = memoryDb.getBlacklistedTrackIds()
+        var list = scanner.searchLocal(query, blacklisted)
+        if (list.isEmpty()) {
+            list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                yandexClient.findLocalTracksByQuery(query)
+            }
+        }
         if (list.isEmpty() && yandexClient.isConfigured() && !yandexClient.isTemporarilyDown()) {
             list = kotlinx.coroutines.runBlocking(Dispatchers.IO) {
                 kotlinx.coroutines.withTimeoutOrNull(10_000L) {

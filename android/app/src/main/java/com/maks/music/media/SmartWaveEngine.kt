@@ -150,6 +150,7 @@ class SmartWaveEngine(
         // 3. Характер (Любимое / Давно не слушал / Новое)
         val now = System.currentTimeMillis()
         val weekAgo = now - 7L * 24L * 3600L * 1000L
+        val recentCooldownMs = 3L * 3600L * 1000L // не ставить трек из памяти, если звучал меньше 3 часов назад
         val charPool = when (settings.character) {
             WaveCharacter.ALL -> pool
             WaveCharacter.FAVORITES -> pool.filter { t ->
@@ -167,13 +168,29 @@ class SmartWaveEngine(
         }
         if (charPool.isNotEmpty()) pool = charPool
 
-        val fresh = pool.filter { it.id !in recentlyPlayedIds }.ifEmpty { pool }
+        // Отсекаем треки из текущей сессии и треки, которые по памяти звучали совсем недавно
+        val notPlayedRecentlyInDb = if (settings.character != WaveCharacter.FAVORITES) {
+            pool.filter { t ->
+                val lastPlayed = trackStats[t.id]?.second ?: 0L
+                lastPlayed <= 0L || (now - lastPlayed) >= recentCooldownMs
+            }
+        } else {
+            pool
+        }
+
+        val basePool = if (notPlayedRecentlyInDb.size >= minOf(size, pool.size / 2).coerceAtLeast(1)) {
+            notPlayedRecentlyInDb
+        } else {
+            notPlayedRecentlyInDb.ifEmpty { pool }
+        }
+
+        val fresh = basePool.filter { it.id !in recentlyPlayedIds }.ifEmpty { basePool }
         val remaining = fresh.toMutableList()
         val queue = mutableListOf<LocalTrack>()
         var lastArtist = ""
 
         while (queue.size < size && remaining.isNotEmpty()) {
-            val picked = pickWeightedTrack(remaining, artistWeights, habitScores, lastArtist)
+            val picked = pickWeightedTrack(remaining, artistWeights, habitScores, trackStats, now, lastArtist)
             queue += picked
             remaining.remove(picked)
             lastArtist = picked.artist.trim().lowercase()
@@ -186,17 +203,39 @@ class SmartWaveEngine(
         candidates: List<LocalTrack>,
         artistWeights: Map<String, Double>,
         habitScores: Map<String, Double>,
+        trackStats: Map<String, Pair<Int, Long>>,
+        nowMs: Long,
         lastArtist: String,
     ): LocalTrack {
         val scored = candidates.map { track ->
             val artistKey = track.artist.trim().lowercase()
             val w = artistWeights[artistKey] ?: 0.0
             val habit = habitScores[artistKey] ?: 0.0
+            val stat = trackStats[track.id]
+            val playCount = stat?.first ?: 0
+            val lastPlayed = stat?.second ?: 0L
 
             var score = exp((w * 0.25).coerceIn(-1.5, 2.0)) + (habit * 0.15).coerceAtMost(1.5)
             if (artistKey.isNotEmpty() && artistKey == lastArtist) {
                 score *= 0.15
             }
+
+            // Мягкий антиповтор по долгой памяти: частые треки слегка притормаживаем,
+            // треки с давним прослушиванием получаем бодрее
+            if (playCount > 1) {
+                score /= (1.0 + (playCount - 1) * 0.2).coerceAtMost(2.5)
+            }
+            if (lastPlayed > 0L) {
+                val hoursAgo = ((nowMs - lastPlayed).coerceAtLeast(0L)) / 3_600_000.0
+                when {
+                    hoursAgo < 12.0 -> score *= 0.35
+                    hoursAgo < 24.0 -> score *= 0.65
+                    hoursAgo > 72.0 -> score *= 1.15
+                }
+            } else {
+                score *= 1.1
+            }
+
             score *= (0.75 + random.nextDouble() * 0.5)
             track to score.coerceAtLeast(0.05)
         }
