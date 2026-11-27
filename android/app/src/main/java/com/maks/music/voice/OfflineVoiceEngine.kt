@@ -395,7 +395,7 @@ class OfflineVoiceEngine(
                 val baseGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
                 val playbackScale = when {
                     !isMusicPlaying -> 1.0f
-                    speakerActive -> 0.55f
+                    speakerActive -> 0.9f
                     else -> 1.15f
                 }
                 val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackScale)
