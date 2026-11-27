@@ -762,10 +762,11 @@ class YandexMusicClient(context: Context) {
         private const val MAX_FAILS = 3
         private const val BLOCK_DURATION_MS = 5 * 60 * 1000L
     }
-        private fun normalizeDirKey(raw: String): String =
+            private fun normalizeDirKey(raw: String): String =
         raw.lowercase()
-            .replace('?', '?')
+            .replace('\u0451', '\u0435')
             .replace(Regex("[\_\-+\s.]+"), " ")
+            .trim()
             .trim()
 
     private fun findExistingSafDir(
@@ -926,3 +927,4 @@ class YandexMusicClient(context: Context) {
             android.util.Log.w(TAG, "exportToSelectedFolder failed: ${it.message}")
         }
     }
+}
