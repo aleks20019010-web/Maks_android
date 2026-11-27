@@ -161,6 +161,11 @@ class MaksApplication : Application() {
                 ttsManager.userSpeechRateMultiplier = cfg.ttsSpeechRate
             }
         }
+        mainScope.launch {
+            musicController.state.collect { st ->
+                OfflineVoiceEngine.isMusicPlaying = st.isPlaying
+            }
+        }
         voiceEngine.preloadModelAsync()
     }
 
