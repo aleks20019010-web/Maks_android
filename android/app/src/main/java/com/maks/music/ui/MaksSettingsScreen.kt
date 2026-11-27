@@ -872,12 +872,31 @@ internal fun MaksSettingsScreen(
                                 )
                                 add(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
+                            val activity = context as? android.app.Activity
+                            var opened = false
                             for (intent in intents) {
                                 val started = runCatching {
-                                    context.startActivity(intent)
+                                    if (activity != null) {
+                                        val cleanIntent = Intent(intent).apply {
+                                            flags = flags and Intent.FLAG_ACTIVITY_NEW_TASK.inv()
+                                        }
+                                        activity.startActivity(cleanIntent)
+                                    } else {
+                                        context.startActivity(intent)
+                                    }
                                     true
                                 }.getOrDefault(false)
-                                if (started) break
+                                if (started) {
+                                    opened = true
+                                    break
+                                }
+                            }
+                            if (!opened) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "???????? ????????? ? ?????????? ? ???? ? ???????",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
                             }
                         },
                         colors = ButtonDefaults.filledTonalButtonColors(

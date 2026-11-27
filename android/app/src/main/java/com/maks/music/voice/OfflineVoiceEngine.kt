@@ -349,7 +349,9 @@ class OfflineVoiceEngine(
                 }
 
                 val baseGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
-                val currentGain = baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f)
+                val playbackBoost = if (isMusicPlaying) 1.25f else 1.0f
+                val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackBoost)
+                    .coerceIn(0.5f, 4.0f)
                 var sumSq = 0.0
                 for (i in 0 until read) {
                     val amplified = (buffer[i] * currentGain).toInt()
@@ -389,11 +391,7 @@ class OfflineVoiceEngine(
                 } else {
                     val partial = extractField(recognizer.partialResult, "partial")
                     if (!inCommandWindow && partial.isNotEmpty()) {
-                        if (partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
-                            lastHotWordAtMs = now
-                            recognizer.reset()
-                            onCommandRecognized(partial, true)
-                        }
+                        // Hotwords require finalized utterance + active playback state to avoid false triggers from external audio/silence
                     }
                 }
             }
@@ -439,6 +437,12 @@ class OfflineVoiceEngine(
         }
 
         if (text in HOT_WORDS) {
+            val playing = isMusicPlaying
+            val resumeWords = setOf("????????", "??????????")
+            val allowed = if (text in resumeWords) !playing else playing
+            if (!allowed) {
+                return
+            }
             val now = System.currentTimeMillis()
             if (now - lastHotWordAtMs > HOT_DEBOUNCE_MS) {
                 lastHotWordAtMs = now
@@ -473,6 +477,7 @@ class OfflineVoiceEngine(
         private const val WAKE_DEBOUNCE_MS = 2_500L
         @Volatile var agcEnabled: Boolean = true
         @Volatile var micGainMultiplier: Float = 1.0f
+        @Volatile var isMusicPlaying: Boolean = false
 
         private const val TABLE_MIC_GAIN = 2.8f
         private const val HEADSET_MIC_GAIN = 1.35f
