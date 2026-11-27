@@ -315,13 +315,15 @@ class YandexMusicClient(context: Context) {
             }
         }
         return LocalTrack(
-            id = entry.trackId.hashCode().toLong().coerceAtLeast(1L),
-            title = entry.title.ifBlank { entry.fileName.substringBeforeLast('.') },
-            artist = entry.artist.ifBlank { "Неизвестный исполнитель" },
-            album = entry.album,
-            durationMs = 0L,
+            id = entry.trackId,
             contentUri = uri,
-            dataPath = entry.fileName,
+            artist = entry.artist.ifBlank { "Неизвестный исполнитель" },
+            title = entry.title.ifBlank { entry.fileName.substringBeforeLast('.') },
+            album = entry.album,
+            genre = "",
+            durationMs = 0L,
+            albumId = 0L,
+            displayName = entry.fileName,
         )
     }
 
