@@ -389,16 +389,18 @@ class OfflineVoiceEngine(
                         }
                     }
                 } else {
-                    val partial = extractField(recognizer.partialResult, "partial")
+                    val partial = extractField(recognizer.partialResult, "partial").trim().lowercase()
                     if (!inCommandWindow && partial.isNotEmpty()) {
                         val playing = isMusicPlaying
                         val isResume = partial == "????????" || partial == "??????????"
-                        val allowed = if (isResume) !playing else playing
-                        if (allowed && partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
+                        val canRun = if (isResume) !playing else playing
+                        if (canRun && partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
                             lastHotWordAtMs = now
                             recognizer.reset()
                             onCommandRecognized(partial, true)
                         }
+                    }
+                }
                     }
                 }
             }
@@ -445,9 +447,9 @@ class OfflineVoiceEngine(
 
         if (text in HOT_WORDS) {
             val playing = isMusicPlaying
-            val resumeWords = setOf("????????", "??????????")
-            val allowed = if (text in resumeWords) !playing else playing
-            if (!allowed) {
+            val isResume = text == "????????" || text == "??????????"
+            val canRun = if (isResume) !playing else playing
+            if (!canRun) {
                 return
             }
             val now = System.currentTimeMillis()

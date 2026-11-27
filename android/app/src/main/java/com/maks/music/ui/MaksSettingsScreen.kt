@@ -836,11 +836,7 @@ internal fun MaksSettingsScreen(
                 icon = Icons.Rounded.BatteryChargingFull,
                 accent = MaksColors.WarningAmber,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+                {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Работа в фоне (батарея)", color = MaksColors.TextPrimary, fontSize = 14.sp)
                         Text(
