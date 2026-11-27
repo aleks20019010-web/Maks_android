@@ -391,7 +391,14 @@ class OfflineVoiceEngine(
                 } else {
                     val partial = extractField(recognizer.partialResult, "partial")
                     if (!inCommandWindow && partial.isNotEmpty()) {
-                        // Hotwords require finalized utterance + active playback state to avoid false triggers from external audio/silence
+                        val playing = isMusicPlaying
+                        val isResume = partial == "????????" || partial == "??????????"
+                        val allowed = if (isResume) !playing else playing
+                        if (allowed && partial in HOT_WORDS && (now - lastHotWordAtMs) > HOT_DEBOUNCE_MS) {
+                            lastHotWordAtMs = now
+                            recognizer.reset()
+                            onCommandRecognized(partial, true)
+                        }
                     }
                 }
             }
