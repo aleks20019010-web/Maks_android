@@ -782,13 +782,13 @@ internal fun MaksSettingsScreen(
                 SettingsDivider()
 
                 Text(
-                    text = "???? ?????? ? ????????? (JSON)",
+                    text = "База лайков и дизлайков (JSON)",
                     color = MaksColors.TextPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = "?????????? ? liked_tracks.json ??????????? ?????",
+                    text = "Совместимо с liked_tracks.json десктопного Макса",
                     color = MaksColors.TextMuted,
                     fontSize = 12.sp,
                 )
@@ -805,7 +805,7 @@ internal fun MaksSettingsScreen(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("???????", fontSize = 12.sp)
+                        Text("Экспорт", fontSize = 12.sp)
                     }
                     FilledTonalButton(
                         onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
@@ -816,20 +816,20 @@ internal fun MaksSettingsScreen(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("??????", fontSize = 12.sp)
+                        Text("Импорт", fontSize = 12.sp)
                     }
                 }
             }
 
-            // 5. ??????? ? ??????????
+            // 5. СИСТЕМА И НАДЁЖНОСТЬ
             SettingsSectionCard(
-                title = "??????? ? ??????????",
+                title = "Система и надёжность",
                 icon = Icons.Rounded.BatteryChargingFull,
                 accent = MaksColors.WarningAmber,
             ) {
                 SettingsToggleRow(
-                    title = "?????????/??????????? ?? Bluetooth",
-                    subtitle = "??????????? ?? ??????????? ????????? ? ?????????????",
+                    title = "Система и надёжность",
+                    title = "Система и надёжность",
                     checked = settings.resumeOnBluetooth,
                     onCheckedChange = viewModel::setResumeOnBluetooth,
                 )
