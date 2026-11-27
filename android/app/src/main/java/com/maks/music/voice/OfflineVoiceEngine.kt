@@ -83,13 +83,18 @@ class OfflineVoiceEngine(
     @Volatile
     private var usingHeadsetMic: Boolean = false
 
+    @Volatile
+    private var isCommModeApplied: Boolean = false
+
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
             activeRecorder?.let { routeToPreferredMic(it) }
+            syncBluetoothCommunicationMode(active = listenJob?.isActive == true)
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
             activeRecorder?.let { routeToPreferredMic(it) }
+            syncBluetoothCommunicationMode(active = listenJob?.isActive == true)
         }
     }
 
@@ -140,6 +145,7 @@ class OfflineVoiceEngine(
         listenJob?.cancel()
         listenJob = null
         commandWindowUntilMs = 0L
+        syncBluetoothCommunicationMode(active = false)
         _micLevel.value = 0f
         if (_state.value != VoiceEngineState.MODEL_MISSING) {
             _state.value = VoiceEngineState.IDLE
@@ -156,21 +162,42 @@ class OfflineVoiceEngine(
         }
     }
 
-    private fun isSpeakerOutputActive(): Boolean {
+    private fun isBluetoothConnected(): Boolean {
         val am = audioManager ?: return false
-        if (usingHeadsetMic) return false
         val outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        val hasExternalOutput = outputs.any {
+        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+
+        val hasBtOutput = outputs.any {
             it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
                 it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-                it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                     (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER))
         }
-        if (hasExternalOutput) return false
-        return outputs.any { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+        val hasBtInput = inputs.any {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+        return hasBtOutput || hasBtInput
+    }
+
+    private fun syncBluetoothCommunicationMode(active: Boolean) {
+        val am = audioManager ?: return
+        val shouldEnable = active && isBluetoothConnected()
+
+        runCatching {
+            if (shouldEnable) {
+                if (am.mode != AudioManager.MODE_IN_COMMUNICATION) {
+                    am.mode = AudioManager.MODE_IN_COMMUNICATION
+                }
+                isCommModeApplied = true
+            } else if (isCommModeApplied) {
+                setBluetoothMicActive(false)
+                if (am.mode == AudioManager.MODE_IN_COMMUNICATION) {
+                    am.mode = AudioManager.MODE_NORMAL
+                }
+                isCommModeApplied = false
+            }
+        }
     }
 
     private fun routeToPreferredMic(recorder: AudioRecord) {
@@ -298,8 +325,8 @@ class OfflineVoiceEngine(
     }
 
     @SuppressLint("MissingPermission")
-    private fun createBestRecorder(minBuf: Int, speakerActive: Boolean): AudioRecord? {
-        val sources = if (speakerActive) {
+    private fun createBestRecorder(minBuf: Int, btConnected: Boolean): AudioRecord? {
+        val sources = if (btConnected) {
             listOf(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -323,7 +350,7 @@ class OfflineVoiceEngine(
                 )
             }.getOrNull()
             if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
-                android.util.Log.i("OfflineVoiceEngine", "AudioRecord source=$src speakerActive=$speakerActive")
+                android.util.Log.i("OfflineVoiceEngine", "AudioRecord source=$src btConnected=$btConnected")
                 return rec
             }
             runCatching { rec?.release() }
@@ -339,9 +366,12 @@ class OfflineVoiceEngine(
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4096)
 
-        val speakerActive = isSpeakerOutputActive()
-        val recorder = createBestRecorder(minBuf, speakerActive)
+        val btConnected = isBluetoothConnected()
+        syncBluetoothCommunicationMode(active = true)
+
+        val recorder = createBestRecorder(minBuf, btConnected)
         if (recorder == null) {
+            syncBluetoothCommunicationMode(active = false)
             _state.value = VoiceEngineState.ERROR
             return
         }
@@ -350,14 +380,14 @@ class OfflineVoiceEngine(
         routeToPreferredMic(recorder)
 
         var aec: AcousticEchoCanceler? = null
-        if (speakerActive && AcousticEchoCanceler.isAvailable()) {
+        if (AcousticEchoCanceler.isAvailable()) {
             aec = runCatching {
                 AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true }
             }.getOrNull()
         }
 
         var ns: NoiseSuppressor? = null
-        if (speakerActive && NoiseSuppressor.isAvailable()) {
+        if (NoiseSuppressor.isAvailable()) {
             ns = runCatching {
                 NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
             }.getOrNull()
@@ -373,7 +403,7 @@ class OfflineVoiceEngine(
 
         android.util.Log.i(
             "OfflineVoiceEngine",
-            "Effects: speaker=$speakerActive aec=${aec?.enabled} ns=${ns?.enabled} agc=${agc?.enabled}"
+            "Effects: bt=$btConnected commMode=${audioManager?.mode} aec=${aec?.enabled} ns=${ns?.enabled} agc=${agc?.enabled}"
         )
 
         val recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
@@ -393,13 +423,9 @@ class OfflineVoiceEngine(
                 }
 
                 val baseGain = if (usingHeadsetMic) HEADSET_MIC_GAIN else TABLE_MIC_GAIN
-                val playbackScale = when {
-                    !isMusicPlaying -> 1.0f
-                    speakerActive -> 0.9f
-                    else -> 1.15f
-                }
-                val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackScale)
-                    .coerceIn(0.4f, 4.0f)
+                val playbackBoost = if (isMusicPlaying) 1.25f else 1.0f
+                val currentGain = (baseGain * micGainMultiplier.coerceIn(0.5f, 3.0f) * playbackBoost)
+                    .coerceIn(0.5f, 4.0f)
                 var sumSq = 0.0
                 for (i in 0 until read) {
                     val amplified = (buffer[i] * currentGain).toInt()
@@ -452,6 +478,7 @@ class OfflineVoiceEngine(
             }
         } finally {
             setBluetoothMicActive(false)
+            syncBluetoothCommunicationMode(active = false)
             activeRecorder = null
             activeAgc = null
             runCatching { recorder.stop() }
