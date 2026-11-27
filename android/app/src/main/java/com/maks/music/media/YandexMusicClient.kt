@@ -746,7 +746,7 @@ class YandexMusicClient(context: Context) {
     }
 
     private fun sanitizeFileName(name: String): String =
-        name.replace(Regex("""[\/:*?"<>|]"""), "_").trim().take(80)
+        .replace(Regex("[^" + "a-zA-Z\u0410-\u044f0-9]+"), " ")
 
     companion object {
         private const val TAG = "YandexMusicClient"
@@ -765,7 +765,7 @@ class YandexMusicClient(context: Context) {
             private fun normalizeDirKey(raw: String): String =
         raw.lowercase()
             .replace('\u0451', '\u0435')
-            .replace(Regex("[\_\-+\s.]+"), " ")
+            .replace(Regex("[^" + "a-zA-Z\u0410-\u044f0-9]+"), " ")
             .trim()
             .trim()
 
