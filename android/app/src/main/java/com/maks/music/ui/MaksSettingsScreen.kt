@@ -170,6 +170,7 @@ internal fun MaksSettingsScreen(
                     fontSize = 12.sp,
                 )
             }
+        } // <-- ИСПРАВЛЕНИЕ: Закрыта скобка для Row шапки
 
         Column(
             modifier = Modifier
@@ -568,81 +569,81 @@ internal fun MaksSettingsScreen(
             }
 
 
-                val context = androidx.compose.ui.platform.LocalContext.current
-                val currentDirUri = runCatching { settings.yandexDownloadDirUri }.getOrDefault("")
-                val folderDisplayName = remember(currentDirUri) {
-                    if (currentDirUri.isBlank()) {
-                        "По умолчанию (yandex_cache)"
-                    } else {
-                        runCatching {
-                            val parsed = android.net.Uri.parse(currentDirUri)
-                            val treeId = runCatching { android.provider.DocumentsContract.getTreeDocumentId(parsed) }.getOrNull().orEmpty()
-                            val docName = treeId.substringAfterLast(':', treeId).substringAfterLast('/').takeIf { it.isNotBlank() }
-                            if (!docName.isNullOrBlank()) "$docName ($currentDirUri)" else currentDirUri
-                        }.getOrDefault(currentDirUri)
-                    }
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val currentDirUri = runCatching { settings.yandexDownloadDirUri }.getOrDefault("")
+            val folderDisplayName = remember(currentDirUri) {
+                if (currentDirUri.isBlank()) {
+                    "По умолчанию (yandex_cache)"
+                } else {
+                    runCatching {
+                        val parsed = android.net.Uri.parse(currentDirUri)
+                        val treeId = runCatching { android.provider.DocumentsContract.getTreeDocumentId(parsed) }.getOrNull().orEmpty()
+                        val docName = treeId.substringAfterLast(':', treeId).substringAfterLast('/').takeIf { it.isNotBlank() }
+                        if (!docName.isNullOrBlank()) "$docName ($currentDirUri)" else currentDirUri
+                    }.getOrDefault(currentDirUri)
                 }
-                val dirPickerLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.OpenDocumentTree()
-                ) { uri ->
-                    if (uri != null) {
-                        runCatching {
-                            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            context.contentResolver.takePersistableUriPermission(uri, flags)
-                        }
-                        viewModel.setYandexDownloadDirUri(uri.toString())
+            }
+            val dirPickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocumentTree()
+            ) { uri ->
+                if (uri != null) {
+                    runCatching {
+                        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        context.contentResolver.takePersistableUriPermission(uri, flags)
                     }
+                    viewModel.setYandexDownloadDirUri(uri.toString())
                 }
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Папка загрузки Яндекс Музыки",
-                            color = MaksColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        if (currentDirUri.isNotBlank()) {
-                            Text(
-                                text = "Выбрана папка",
-                                color = MaksColors.LavenderGlow,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
                     Text(
-                        text = folderDisplayName,
-                        color = if (currentDirUri.isNotBlank()) MaksColors.TextPrimary else MaksColors.TextMuted,
-                        fontSize = 11.sp,
-                        maxLines = 2,
+                        text = "Папка загрузки Яндекс Музыки",
+                        color = MaksColors.TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    if (currentDirUri.isNotBlank()) {
+                        Text(
+                            text = "Выбрана папка",
+                            color = MaksColors.LavenderGlow,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Text(
+                    text = folderDisplayName,
+                    color = if (currentDirUri.isNotBlank()) MaksColors.TextPrimary else MaksColors.TextMuted,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilledTonalButton(
+                        onClick = { dirPickerLauncher.launch(null) },
+                        modifier = Modifier.weight(1f),
                     ) {
+                        Text("Выбрать папку", fontSize = 11.sp)
+                    }
+                    if (currentDirUri.isNotBlank()) {
                         FilledTonalButton(
-                            onClick = { dirPickerLauncher.launch(null) },
-                            modifier = Modifier.weight(1f),
+                            onClick = { viewModel.setYandexDownloadDirUri("") },
                         ) {
-                            Text("Выбрать папку", fontSize = 11.sp)
-                        }
-                        if (currentDirUri.isNotBlank()) {
-                            FilledTonalButton(
-                                onClick = { viewModel.setYandexDownloadDirUri("") },
-                            ) {
-                                Text("Сброс", fontSize = 11.sp)
-                            }
+                            Text("Сброс", fontSize = 11.sp)
                         }
                     }
                 }
+            }
 
             // 4. МЕДИАТЕКА И УМНАЯ ВОЛНА
             SettingsSectionCard(
@@ -835,11 +836,10 @@ internal fun MaksSettingsScreen(
 
             Spacer(Modifier.height(16.dp))
         }
-    }
-}
+    } // <-- ИСПРАВЛЕНИЕ: Закрыта корневая Column
+} // <-- ИСПРАВЛЕНИЕ: Закрыта сама функция MaksSettingsScreen
 
 @Composable
-}
 private fun SettingsSectionCard(
     title: String,
     icon: ImageVector,

@@ -1,4 +1,4 @@
-# Макс Музыка — музыкальный ассистент для Android
+# MaxSound — музыкальный ассистент для Android
 
 Нативное **local-first** Android-приложение (**Kotlin + Jetpack Compose + Media3 ExoPlayer + Vosk + TTS**) с локальным музыкальным ядром Макса и опциональной интеграцией **Яндекс Музыки**.
 
