@@ -776,8 +776,6 @@ internal fun MaksSettingsScreen(
                         }
                     }
                 }
-            }
-
 
                 SettingsDivider()
 
