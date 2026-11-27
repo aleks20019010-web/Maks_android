@@ -839,6 +839,7 @@ internal fun MaksSettingsScreen(
 }
 
 @Composable
+}
 private fun SettingsSectionCard(
     title: String,
     icon: ImageVector,
