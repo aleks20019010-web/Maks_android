@@ -828,8 +828,8 @@ internal fun MaksSettingsScreen(
                 accent = MaksColors.WarningAmber,
             ) {
                 SettingsToggleRow(
-                    title = "Система и надёжность",
-                    title = "Система и надёжность",
+                    title = "Автопауза/продолжение по Bluetooth",
+                    subtitle = "Реагировать на подключение гарнитуры и автомагнитолы",
                     checked = settings.resumeOnBluetooth,
                     onCheckedChange = viewModel::setResumeOnBluetooth,
                 )
