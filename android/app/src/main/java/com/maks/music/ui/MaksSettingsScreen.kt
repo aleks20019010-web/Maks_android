@@ -783,17 +783,20 @@ internal fun MaksSettingsScreen(
                 SettingsDivider()
 
                 Text(
-                    text = "База лайков и дизлайков (JSON)",
+                    text = "???? ?????? ? ????????? (JSON)",
                     color = MaksColors.TextPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = "Совместимо с liked_tracks.json десктопного Макса",
+                    text = "?????????? ? liked_tracks.json ??????????? ?????",
                     color = MaksColors.TextMuted,
                     fontSize = 12.sp,
                 )
-                 {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     FilledTonalButton(
                         onClick = { exportLauncher.launch("maks_liked_tracks.json") },
                         colors = ButtonDefaults.filledTonalButtonColors(
@@ -803,7 +806,7 @@ internal fun MaksSettingsScreen(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Экспорт", fontSize = 12.sp)
+                        Text("???????", fontSize = 12.sp)
                     }
                     FilledTonalButton(
                         onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
@@ -814,88 +817,20 @@ internal fun MaksSettingsScreen(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Импорт", fontSize = 12.sp)
+                        Text("??????", fontSize = 12.sp)
                     }
                 }
+            }
 
-            // 5. СИСТЕМА И НАДЁЖНОСТЬ
+            // 5. ??????? ? ??????????
             SettingsSectionCard(
-                title = "Система и надёжность",
+                title = "??????? ? ??????????",
                 icon = Icons.Rounded.BatteryChargingFull,
                 accent = MaksColors.WarningAmber,
             ) {
-                {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Работа в фоне (батарея)", color = MaksColors.TextPrimary, fontSize = 14.sp)
-                        Text(
-                            text = if (isBatteryUnrestricted) "Ограничения сняты" else "Есть ограничения — Android может выгружать фон",
-                            color = if (isBatteryUnrestricted) MaksColors.TealAccent else MaksColors.WarningAmber,
-                            fontSize = 12.sp,
-                        )
-                    }
-                    FilledTonalButton(
-                        onClick = {
-                            val intents = buildList {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                    add(
-                                        Intent(
-                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                            Uri.parse("package:${context.packageName}")
-                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                    add(
-                                        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }
-                                add(
-                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                        data = Uri.parse("package:${context.packageName}")
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                )
-                                add(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            }
-                            val activity = context as? android.app.Activity
-                            var opened = false
-                            for (intent in intents) {
-                                val started = runCatching {
-                                    if (activity != null) {
-                                        val cleanIntent = Intent(intent).apply {
-                                            flags = flags and Intent.FLAG_ACTIVITY_NEW_TASK.inv()
-                                        }
-                                        activity.startActivity(cleanIntent)
-                                    } else {
-                                        context.startActivity(intent)
-                                    }
-                                    true
-                                }.getOrDefault(false)
-                                if (started) {
-                                    opened = true
-                                    break
-                                }
-                            }
-                            if (!opened) {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "???????? ????????? ? ?????????? ? ???? ? ???????",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        },
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaksColors.WarningAmber.copy(alpha = 0.18f),
-                            contentColor = MaksColors.WarningAmber,
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        Text("Настроить", fontSize = 12.sp)
-                    }
-                }
-
                 SettingsToggleRow(
-                    title = "Автопауза/продолжение по Bluetooth",
-                    subtitle = "Реагировать на подключение гарнитуры и автомагнитолы",
+                    title = "?????????/??????????? ?? Bluetooth",
+                    subtitle = "??????????? ?? ??????????? ????????? ? ?????????????",
                     checked = settings.resumeOnBluetooth,
                     onCheckedChange = viewModel::setResumeOnBluetooth,
                 )
