@@ -162,7 +162,7 @@ class MaksApplication : Application() {
             }
         }
         mainScope.launch {
-            musicController.state.collect { st ->
+            musicController.uiState.collect { st ->
                 OfflineVoiceEngine.isMusicPlaying = st.isPlaying
             }
         }
