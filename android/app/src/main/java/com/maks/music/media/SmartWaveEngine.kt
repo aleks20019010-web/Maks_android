@@ -2,6 +2,7 @@ package com.maks.music.media
 
 import com.maks.music.core.TimeBucket
 import com.maks.music.core.memory.MusicMemoryDb
+import com.maks.music.core.memory.TasteMapEngine
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.exp
 import kotlin.random.Random
@@ -23,7 +24,7 @@ enum class WaveMood(val label: String) {
 data class WaveSettings(
     val character: WaveCharacter = WaveCharacter.ALL,
     val mood: WaveMood = WaveMood.ANY,
-    val languageFilter: String? = null, // null = любой, "russian", "not-russian"
+    val languageFilter: String? = null,
     val genreFilter: String? = null,
 ) {
     fun displayLabel(): String {
@@ -52,36 +53,31 @@ data class WaveSettings(
     }
 }
 
-/**
- * Адаптивный рекомендательный движок MaxSound:
- * - Многосигнальный скоринг (веса артистов, контекст времени суток, лайки, частота и давность)
- * - Плавный переход по графу жанровой близости (GenreSimilarity) при нехватке основного жанра
- * - Сессионная реакция на скипы в реальном времени (наказание скипнутого артиста/жанра в текущей волне)
- * - Баланс Exploration / Exploitation (чередование проверенного, забытого и нового)
- */
 class SmartWaveEngine(
     private val memoryDb: MusicMemoryDb,
     private val random: Random = Random.Default,
     val coordinator: WaveCoordinator = WaveCoordinator(memoryDb),
 ) {
-    // Временные штрафы внутри текущей сессии волны (0.1..1.0)
+    val tasteMapEngine = TasteMapEngine(memoryDb)
+
     private val sessionArtistPenalty = ConcurrentHashMap<String, Double>()
     private val sessionGenrePenalty = ConcurrentHashMap<String, Double>()
+
+    @Volatile
+    private var lastAnchorArtistKey: String = ""
 
     fun resetSessionFeedback() {
         sessionArtistPenalty.clear()
         sessionGenrePenalty.clear()
+        lastAnchorArtistKey = ""
+        tasteMapEngine.invalidate()
     }
 
-    /**
-     * Вызывается при пользовательском скипе в волне: мгновенно снижает вес артиста и его жанрового бакета
-     * в рамках текущей сессии, чтобы хвост волны перестроился на лету.
-     */
     fun recordSessionSkip(track: LocalTrack, completionRatio: Float) {
         val severity = when {
-            completionRatio < 0.15f -> 0.25 // жёсткий ранний скип
-            completionRatio < 0.45f -> 0.50 // средний скип
-            else -> 0.75                    // поздний скип
+            completionRatio < 0.15f -> 0.25
+            completionRatio < 0.45f -> 0.50
+            else -> 0.75
         }
         val artistKey = track.artist.trim().lowercase()
         if (artistKey.isNotEmpty()) {
@@ -95,15 +91,14 @@ class SmartWaveEngine(
             val gFactor = if (completionRatio < 0.20f) 0.65 else 0.85
             sessionGenrePenalty[bucketKey] = (prevG * gFactor).coerceAtLeast(0.25)
         }
+        tasteMapEngine.invalidate()
     }
 
-    /**
-     * Вызывается при дослушивании или лайке: мягко снимает сессионные штрафы с артиста и жанра.
-     */
     fun recordSessionPositive(track: LocalTrack) {
         val artistKey = track.artist.trim().lowercase()
         if (artistKey.isNotEmpty()) {
             sessionArtistPenalty.remove(artistKey)
+            lastAnchorArtistKey = artistKey
         }
         val bucketKey = GenreSimilarity.resolveBucket(track.genre)?.canonical
             ?: track.genre.trim().lowercase()
@@ -113,6 +108,7 @@ class SmartWaveEngine(
                 sessionGenrePenalty[bucketKey] = (cur * 1.25).coerceAtMost(1.0)
             }
         }
+        tasteMapEngine.invalidate()
     }
 
     fun markPlayed(trackId: String) {
@@ -147,13 +143,13 @@ class SmartWaveEngine(
         val trackStats = memoryDb.getTrackPlayStats()
         val likedIds = memoryDb.getLikedTrackIds()
         val likedKeys = memoryDb.getLikedTrackKeys()
+        val tasteMap = tasteMapEngine.getOrBuild(allTracks)
 
         var pool = allTracks.filter { t ->
             t.id !in blacklistedTracks && t.artist.trim().lowercase() !in blacklistedArtists
         }
         if (pool.isEmpty()) pool = allTracks
 
-        // 1. Язык
         if (settings.languageFilter == "russian") {
             pool = pool.filter { it.isRussian }
         } else if (settings.languageFilter == "not-russian") {
@@ -161,7 +157,6 @@ class SmartWaveEngine(
         }
         if (pool.isEmpty()) return emptyList()
 
-        // 2. Настроение
         if (settings.mood != WaveMood.ANY) {
             val hints = when (settings.mood) {
                 WaveMood.ENERGETIC -> listOf("rock", "pop", "dance", "dnb", "punk", "electronic", "rap", "hip")
@@ -175,7 +170,6 @@ class SmartWaveEngine(
             if (moodFiltered.size >= 5) pool = moodFiltered
         }
 
-        // 3. Характер (строгие лайки для FAVORITES)
         val now = System.currentTimeMillis()
         val weekAgo = now - 7L * 24L * 3600L * 1000L
         pool = when (settings.character) {
@@ -195,7 +189,6 @@ class SmartWaveEngine(
         }
         if (pool.isEmpty()) return emptyList()
 
-        // 4. Жанр с плавной эскалацией на похожие стили (GenreSimilarity)
         val targetGenre = settings.genreFilter?.trim()?.lowercase()?.removePrefix("genre:")
         val genreWeightMap = HashMap<String, Double>(pool.size)
         if (!targetGenre.isNullOrBlank()) {
@@ -213,7 +206,6 @@ class SmartWaveEngine(
                 }
             }
 
-            // Проверяем, сколько свежих (ещё не игравших в волне) треков осталось в основном жанре
             val freshExact = coordinator.filterLocalCandidates(
                 candidates = exactMatches,
                 settings = settings,
@@ -227,10 +219,9 @@ class SmartWaveEngine(
             pool = when {
                 freshExact.size >= 5 -> exactMatches
                 exactMatches.isNotEmpty() || neighborMatches.isNotEmpty() -> {
-                    // Основной жанр на исходе -> плавно подключаем похожие жанры с весом 0.65
                     (exactMatches + neighborMatches).distinctBy { it.id }
                 }
-                else -> pool // если теги жанров в библиотеке пустые, не падаем в пустоту
+                else -> pool
             }
         }
 
@@ -248,13 +239,13 @@ class SmartWaveEngine(
         val recentArtists = ArrayDeque<String>()
 
         while (queue.size < size && remaining.isNotEmpty()) {
-            // Слоты Exploration/Exploitation для общего режима:
-            // каждый 5-й слот отдаём приоритет новым/забытым трекам, чтобы волна не зацикливалась
             val slotIndex = queue.size
             val explorationBoost = (settings.character == WaveCharacter.ALL && slotIndex > 0 && slotIndex % 5 == 4)
 
             val picked = pickWeightedTrack(
                 candidates = remaining,
+                settings = settings,
+                tasteMap = tasteMap,
                 artistWeights = artistWeights,
                 habitScores = habitScores,
                 trackStats = trackStats,
@@ -281,6 +272,8 @@ class SmartWaveEngine(
 
     private fun pickWeightedTrack(
         candidates: List<LocalTrack>,
+        settings: WaveSettings,
+        tasteMap: TasteMapEngine.TasteMap,
         artistWeights: Map<String, Double>,
         habitScores: Map<String, Double>,
         trackStats: Map<String, Pair<Int, Long>>,
@@ -291,45 +284,72 @@ class SmartWaveEngine(
         recentArtists: ArrayDeque<String>,
         explorationBoost: Boolean,
     ): LocalTrack {
+        val anchorNeighbors = lastAnchorArtistKey
+            .takeIf { it.isNotEmpty() }
+            ?.let { tasteMap.relatedArtists[it] }
+            .orEmpty()
+
         val scored = candidates.map { track ->
             val artistKey = track.artist.trim().lowercase()
+            val tKey = MusicMemoryDb.trackKey(track.artist, track.title)
             val w = artistWeights[artistKey] ?: 0.0
             val habit = habitScores[artistKey] ?: 0.0
             val stat = trackStats[track.id]
             val playCount = stat?.first ?: 0
             val lastPlayed = stat?.second ?: 0L
-            val isLiked = track.id in likedIds ||
-                "ya_${track.id}" in likedIds ||
-                MusicMemoryDb.trackKey(track.artist, track.title) in likedKeys
+            val isLiked = track.id in likedIds || "ya_${track.id}" in likedIds || tKey in likedKeys
 
-            // 1. Базовый вес по предпочтениям и контексту времени суток
+            val affinity = tasteMap.trackAffinities[track.id] ?: tasteMap.trackAffinities[tKey]
+
             var score = exp((w * 0.25).coerceIn(-1.5, 2.0)) + (habit * 0.15).coerceAtMost(1.5)
             if (isLiked) score *= 1.35
 
-            // 2. Жанровая близость (1.0 для точного жанра, 0.65 для похожего)
-            genreWeightMap[track.id]?.let { gw -> score *= gw }
-
-            // 3. Сессионные штрафы (реакция на скипы в текущей волне)
-            if (artistKey.isNotEmpty()) {
-                sessionArtistPenalty[artistKey]?.let { p -> score *= p }
+            // 1. Влияние локальной карты вкуса (time-decay affinity, уставшие треки и rising gems)
+            if (affinity != null) {
+                val affinityFactor = (1.0 + affinity.score * 0.12).coerceIn(0.45, 1.85)
+                score *= affinityFactor
+                if (affinity.isFatigued && settings.character != WaveCharacter.FAVORITES) {
+                    score *= 0.22 // даём уставшему треку отдохнуть в общей волне
+                }
             }
+            if (track.id in tasteMap.risingGemIds) {
+                score *= 1.25
+            }
+
+            // 2. Граф совместного прослушивания (если зашёл предыдущий артист — поднимаем его соседей по вайбу)
+            anchorNeighbors[artistKey]?.let { linkStrength ->
+                score *= (1.0 + linkStrength * 0.45)
+            }
+
+            // 3. Жанровый профиль текущего времени суток + явный фильтр жанра
             val bucketKey = GenreSimilarity.resolveBucket(track.genre)?.canonical
                 ?: track.genre.trim().lowercase()
             if (bucketKey.isNotEmpty()) {
-                sessionGenrePenalty[bucketKey]?.let { gp -> score *= gp }
+                tasteMap.bucketGenreAffinity[bucketKey]?.let { timeMult ->
+                    score *= timeMult
+                }
+                sessionGenrePenalty[bucketKey]?.let { gp ->
+                    score *= gp
+                }
+            }
+            genreWeightMap[track.id]?.let { gw -> score *= gw }
+
+            // 4. Сессионные штрафы артиста при скипах
+            if (artistKey.isNotEmpty()) {
+                sessionArtistPenalty[artistKey]?.let { p -> score *= p }
             }
 
-            // 4. Анти-усталость по артисту (diversity window на последние 4 трека)
+            // 5. Анти-усталость по артисту (окно 4 последних треков)
             if (artistKey.isNotEmpty() && artistKey in recentArtists) {
                 val distFromEnd = recentArtists.reversed().indexOf(artistKey)
                 score *= when (distFromEnd) {
-                    0 -> 0.08 // подряд — почти исключаем
-                    1 -> 0.25 // через 1 трек — сильно режем
+                    0 -> 0.08
+                    1 -> 0.25
                     else -> 0.55
                 }
             }
 
-            // 5. Давность и Exploration/Exploitation
+            // 6. Давность и Exploration/Exploitation
             if (playCount > 1) {
                 score /= (1.0 + (playCount - 1) * 0.2).coerceAtMost(2.5)
             }
