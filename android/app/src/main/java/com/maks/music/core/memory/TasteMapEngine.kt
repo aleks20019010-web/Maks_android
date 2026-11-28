@@ -3,6 +3,7 @@ package com.maks.music.core.memory
 import com.maks.music.core.TimeBucket
 import com.maks.music.media.GenreSimilarity
 import com.maks.music.media.LocalTrack
+import java.util.Calendar
 import kotlin.math.exp
 
 /**
@@ -27,13 +28,13 @@ class TasteMapEngine(
 
     data class TasteMap(
         val generatedAtMs: Long,
-        val bucket: TimeBucket,
-        val trackAffinities: Map<String, TrackAffinity>,      // по trackId и по trackKey
+        val bucket: String,
+        val trackAffinities: Map<String, TrackAffinity>,
         val fatiguedTrackIds: Set<String>,
-        val coreFavoriteIds: Set<String>,                     // ядро «условно избранных» для буста в общей волне
-        val risingGemIds: Set<String>,                        // недавно зашедшие треки без лайка
-        val relatedArtists: Map<String, Map<String, Double>>, // artistKey -> (neighborArtistKey -> strength 0..1)
-        val bucketGenreAffinity: Map<String, Double>,         // canonicalGenre -> multiplier (0.7..1.45)
+        val coreFavoriteIds: Set<String>,
+        val risingGemIds: Set<String>,
+        val relatedArtists: Map<String, Map<String, Double>>,
+        val bucketGenreAffinity: Map<String, Double>,
     )
 
     @Volatile
@@ -44,21 +45,26 @@ class TasteMapEngine(
         forceRefresh: Boolean = false,
         nowMs: Long = System.currentTimeMillis(),
     ): TasteMap {
+        val currentBucket = bucketForTimestamp(nowMs)
         val existing = cachedMap
         if (!forceRefresh && existing != null && (nowMs - existing.generatedAtMs) < CACHE_TTL_MS &&
-            existing.bucket == TimeBucket.current(nowMs)
+            existing.bucket == currentBucket
         ) {
             return existing
         }
-        return buildInternal(allTracks, nowMs).also { cachedMap = it }
+        return buildInternal(allTracks, currentBucket, nowMs).also { cachedMap = it }
     }
 
     fun invalidate() {
         cachedMap = null
     }
 
-    private fun buildInternal(allTracks: List<LocalTrack>, nowMs: Long): TasteMap {
-        val bucket = TimeBucket.current(nowMs)
+    private fun bucketForTimestamp(tsMs: Long): String {
+        val hour = Calendar.getInstance().apply { timeInMillis = tsMs }.get(Calendar.HOUR_OF_DAY)
+        return TimeBucket.bucketForHour(hour)
+    }
+
+    private fun buildInternal(allTracks: List<LocalTrack>, bucket: String, nowMs: Long): TasteMap {
         val likedIds = runCatching { memoryDb.getLikedTrackIds() }.getOrDefault(emptySet())
         val likedKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
 
@@ -73,7 +79,6 @@ class TasteMapEngine(
             }
         }
 
-        // Читаем события за последние 90 дней для расчёта затухающих весов и сессий
         val lookbackMs = 90L * 86_400_000L
         val sinceMs = nowMs - lookbackMs
         val tenDaysAgo = nowMs - 10L * 86_400_000L
@@ -169,8 +174,7 @@ class TasteMapEngine(
                 }
             }
 
-            // Контекстный профиль жанров для текущего TimeBucket
-            if (ev.bucketId == bucket.id) {
+            if (ev.bucketId == bucket) {
                 val g = trackGenreById[ev.trackId] ?: trackGenreByKey[tKey]
                 if (!g.isNullOrBlank()) {
                     val delta = when (ev.type) {
@@ -185,7 +189,6 @@ class TasteMapEngine(
                 }
             }
 
-            // Граф совместного прослушивания артистов в одной сессии (окно <= 20 мин)
             if (ev.type == "play_finish" && aKey.isNotEmpty()) {
                 if (prevFinishArtist.isNotEmpty() && prevFinishArtist != aKey && (ev.ts - prevFinishTs) <= SESSION_GAP_MS) {
                     val w = 1.0 * decay
@@ -199,7 +202,6 @@ class TasteMapEngine(
             }
         }
 
-        // Подмешиваем явные лайки из базы, даже если событие like было старше 90 дней
         val affinityMap = HashMap<String, TrackAffinity>(byKey.size * 2)
         val fatiguedIds = HashSet<String>()
         val coreIds = HashSet<String>()
@@ -229,7 +231,6 @@ class TasteMapEngine(
             }
         }
 
-        // Нормализуем граф соседей артистов в диапазон 0.0..1.0
         val relatedNormalized = HashMap<String, Map<String, Double>>(pairCounts.size)
         for ((artist, neighbors) in pairCounts) {
             val maxVal = neighbors.values.maxOrNull() ?: continue
@@ -239,7 +240,6 @@ class TasteMapEngine(
                 .filterValues { it >= 0.25 }
         }
 
-        // Нормализуем жанровый множитель текущего времени суток (0.75..1.40)
         val bucketGenreMultipliers = bucketGenreRaw.mapValues { (_, raw) ->
             (1.0 + (raw * 0.08)).coerceIn(0.75, 1.40)
         }

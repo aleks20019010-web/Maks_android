@@ -9,6 +9,7 @@ import com.maks.music.core.TimeBucket
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Calendar
 
 class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
     context,
@@ -246,6 +247,19 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         writeExternalBackupSnapshot()
     }
 
+    fun unblacklistTrack(trackId: String) {
+        if (trackId.isBlank()) return
+        writableDatabase.delete("blacklist_tracks", "track_id = ?", arrayOf(trackId))
+        writeExternalBackupSnapshot()
+    }
+
+    fun unblacklistArtist(artistKey: String) {
+        val cleanKey = artistKey.trim().lowercase()
+        if (cleanKey.isBlank()) return
+        writableDatabase.delete("blacklist_artists", "artist_key = ?", arrayOf(cleanKey))
+        writeExternalBackupSnapshot()
+    }
+
     fun getBlacklistedTrackIds(): Set<String> {
         val set = mutableSetOf<String>()
         readableDatabase.rawQuery("SELECT track_id FROM blacklist_tracks", null).use { c ->
@@ -266,6 +280,41 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         return set
     }
 
+    fun getBlacklistedEntries(): List<BlacklistedEntry> {
+        val list = mutableListOf<BlacklistedEntry>()
+        readableDatabase.rawQuery(
+            "SELECT artist_key, artist_display, ts FROM blacklist_artists ORDER BY ts DESC",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                val key = c.getString(0).orEmpty()
+                val display = c.getString(1).orEmpty().ifBlank { key }
+                list += BlacklistedEntry(
+                    id = key,
+                    artist = display,
+                    title = "",
+                    isArtist = true,
+                    ts = c.getLong(2),
+                )
+            }
+        }
+        readableDatabase.rawQuery(
+            "SELECT track_id, artist, title, ts FROM blacklist_tracks ORDER BY ts DESC",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                list += BlacklistedEntry(
+                    id = c.getString(0).orEmpty(),
+                    artist = c.getString(1).orEmpty(),
+                    title = c.getString(2).orEmpty(),
+                    isArtist = false,
+                    ts = c.getLong(3),
+                )
+            }
+        }
+        return list
+    }
+
     fun getArtistWeights(): Map<String, Double> {
         val map = mutableMapOf<String, Double>()
         readableDatabase.rawQuery("SELECT artist_key, weight FROM artist_stats", null).use { c ->
@@ -276,7 +325,7 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         return map
     }
 
-    fun getHabitScores(bucket: TimeBucket, lookbackDays: Int = 21): Map<String, Double> {
+    fun getHabitScores(bucket: String = TimeBucket.current(), lookbackDays: Int = 21): Map<String, Double> {
         val since = System.currentTimeMillis() - lookbackDays * 86_400_000L
         val scores = mutableMapOf<String, Double>()
         readableDatabase.rawQuery(
@@ -286,7 +335,7 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
             WHERE ts >= ? AND time_bucket = ? AND artist != ''
             GROUP BY artist, event_type
             """.trimIndent(),
-            arrayOf(since.toString(), bucket.id),
+            arrayOf(since.toString(), bucket),
         ).use { c ->
             while (c.moveToNext()) {
                 val key = c.getString(0).trim().lowercase()
@@ -527,10 +576,10 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         writeExternalBackupSnapshot()
 
         return ImportResult(
-            likes = importedLikes,
-            blacklistedTracks = importedBlTracks,
-            blacklistedArtists = importedBlArtists,
-            artistStats = importedStats,
+            likedAdded = importedLikes,
+            dislikedTracksAdded = importedBlTracks,
+            dislikedArtistsAdded = importedBlArtists,
+            statsAdded = importedStats,
         )
     }
 
@@ -552,9 +601,10 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         durationSec: Int,
         extra: String,
     ) {
+        val hour = Calendar.getInstance().apply { timeInMillis = ts }.get(Calendar.HOUR_OF_DAY)
         val cv = ContentValues().apply {
             put("ts", ts)
-            put("time_bucket", TimeBucket.fromTimestamp(ts).id)
+            put("time_bucket", TimeBucket.bucketForHour(hour))
             put("event_type", type)
             put("track_id", trackId)
             put("artist", artist)
@@ -628,6 +678,14 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
         }
     }
 
+    data class BlacklistedEntry(
+        val id: String,
+        val artist: String,
+        val title: String,
+        val isArtist: Boolean,
+        val ts: Long = 0L,
+    )
+
     data class ArtistSummary(
         val artist: String,
         val weight: Double,
@@ -637,10 +695,10 @@ class MusicMemoryDb(private val context: Context) : SQLiteOpenHelper(
     )
 
     data class ImportResult(
-        val likes: Int,
-        val blacklistedTracks: Int,
-        val blacklistedArtists: Int,
-        val artistStats: Int,
+        val likedAdded: Int,
+        val dislikedTracksAdded: Int,
+        val dislikedArtistsAdded: Int = 0,
+        val statsAdded: Int = 0,
     )
 
     companion object {
