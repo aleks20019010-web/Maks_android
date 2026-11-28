@@ -167,6 +167,9 @@ class MaksApplication : Application() {
             }
         }
         voiceEngine.preloadModelAsync()
+        mainScope.launch(Dispatchers.IO) {
+            runCatching { musicController.refreshLibrary() }
+        }
     }
 
     fun submitTextCommand(text: String) {

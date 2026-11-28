@@ -179,6 +179,31 @@ class LocalMusicController(
         player = null
     }
 
+    /**
+     * Возвращает актуальный список треков: из сканера, из UI-состояния или через внеочередное сканирование,
+     * если список ещё пуст (например, при холодном старте до открытия экрана медиатеки).
+     */
+    private fun ensureTracksLoaded(forceScan: Boolean = false): List<LocalTrack> {
+        if (!forceScan) {
+            val fromScanner = scanner.allTracks()
+            if (fromScanner.isNotEmpty()) return fromScanner
+
+            val fromState = _uiState.value.allTracks
+            if (fromState.isNotEmpty()) return fromState
+        }
+
+        val scanned = runCatching { scanner.scan() }.getOrDefault(emptyList())
+        if (scanned.isNotEmpty()) {
+            _uiState.update {
+                it.copy(
+                    libraryCount = scanned.size,
+                    allTracks = scanned,
+                )
+            }
+        }
+        return scanned
+    }
+
     suspend fun syncYandexLikesToLocal(): Int {
         if (!yandexClient.isConfigured() || yandexClient.isTemporarilyDown() || !yandexClient.isNetworkAllowed()) {
             return 0
@@ -274,7 +299,7 @@ class LocalMusicController(
             genreFilter = currentWaveSettings.genreFilter,
             currentQueue = { queue },
             currentIndex = { currentIndex },
-            localTracksProvider = { scanner.allTracks() },
+            localTracksProvider = { ensureTracksLoaded() },
             blacklistedIdsProvider = { runCatching { memoryDb.getBlacklistedTrackIds() }.getOrDefault(emptySet()) },
             onInsertNextTrack = { insertAt, track ->
                 scope.launch(Dispatchers.Main) {
@@ -293,11 +318,13 @@ class LocalMusicController(
 
     private fun rebuildWaveTailAfterSkip() {
         if (!isWaveMode || currentIndex < 0 || currentIndex >= queue.lastIndex) return
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return
         val playedAndCurrent = queue.take(currentIndex + 1)
         val remainingCount = (queue.size - playedAndCurrent.size).coerceAtLeast(10)
         val freshTail = runCatching {
             waveEngine.buildWaveQueue(
-                allTracks = scanner.allTracks(),
+                allTracks = pool,
                 settings = currentWaveSettings,
                 size = remainingCount,
             )
@@ -318,7 +345,11 @@ class LocalMusicController(
         playWave(WaveSettings(languageFilter = languageFilter))
 
     fun playWave(settings: WaveSettings): Boolean {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return false
+
         if (settings.character == WaveCharacter.FAVORITES) {
+            runCatching { memoryDb.seedInitialLikesIfNeeded() }
             scope.launch(Dispatchers.IO) {
                 runCatching { syncYandexLikesToLocal() }
             }
@@ -329,8 +360,10 @@ class LocalMusicController(
         waveEngine.resetSessionFeedback()
         waveEngine.coordinator.startNewWave(settings)
         val list = runCatching {
-            waveEngine.buildWaveQueue(scanner.allTracks(), settings)
-        }.getOrDefault(emptyList())
+            waveEngine.buildWaveQueue(pool, settings)
+        }.getOrDefault(emptyList()).ifEmpty {
+            if (settings.character == WaveCharacter.FAVORITES) emptyList() else pool.shuffled().take(30)
+        }
         if (list.isEmpty()) return false
         _uiState.update { it.copy(waveSettings = settings) }
         startQueue(list, settings.displayLabel())
@@ -340,6 +373,8 @@ class LocalMusicController(
     }
 
     fun playArtist(artist: String): Boolean {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return false
         isWaveMode = false
         yandexBridge.resetWaveSession()
         val blacklisted = runCatching { memoryDb.getBlacklistedTrackIds() }.getOrDefault(emptySet())
@@ -350,6 +385,8 @@ class LocalMusicController(
     }
 
     fun playGenre(genre: String): Boolean {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return false
         val list = scanner.findByGenre(genre, runCatching { memoryDb.getBlacklistedTrackIds() }.getOrDefault(emptySet()))
         if (list.isEmpty()) return false
         startQueue(list, "Жанр · ${genre.removePrefix("genre:")}")
@@ -357,14 +394,19 @@ class LocalMusicController(
     }
 
     fun playMood(mood: String): Boolean {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return false
         val list = scanner.findByMood(mood, runCatching { memoryDb.getBlacklistedTrackIds() }.getOrDefault(emptySet()))
-            .ifEmpty { runCatching { waveEngine.buildWaveQueue(scanner.allTracks()) }.getOrDefault(emptyList()) }
+            .ifEmpty { runCatching { waveEngine.buildWaveQueue(pool) }.getOrDefault(emptyList()) }
+            .ifEmpty { pool.shuffled().take(30) }
         if (list.isEmpty()) return false
         startQueue(list, mood)
         return true
     }
 
     fun playSearch(query: String): LocalTrack? {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return null
         isWaveMode = false
         yandexBridge.resetWaveSession()
         val blacklisted = runCatching { memoryDb.getBlacklistedTrackIds() }.getOrDefault(emptySet())
@@ -375,13 +417,16 @@ class LocalMusicController(
     }
 
     fun playLocalLiked(): Boolean {
+        val pool = ensureTracksLoaded()
+        if (pool.isEmpty()) return false
+        runCatching { memoryDb.seedInitialLikesIfNeeded() }
         scope.launch(Dispatchers.IO) {
             runCatching { syncYandexLikesToLocal() }
         }
         val likedIds = runCatching { memoryDb.getLikedTrackIds() }.getOrDefault(emptySet())
         val likedKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
         if (likedIds.isEmpty() && likedKeys.isEmpty()) return false
-        val list = scanner.allTracks()
+        val list = pool
             .filter { track ->
                 track.id in likedIds ||
                     "ya_${track.id}" in likedIds ||
@@ -521,8 +566,9 @@ class LocalMusicController(
             return currentTrack()
         }
 
+        val pool = ensureTracksLoaded()
         val nextWave = runCatching {
-            waveEngine.buildWaveQueue(scanner.allTracks(), currentWaveSettings)
+            waveEngine.buildWaveQueue(pool, currentWaveSettings)
         }.getOrDefault(emptyList())
         if (nextWave.isEmpty()) return null
         startQueue(nextWave, _uiState.value.modeLabel, useFadeIn = shouldFadeIn)
