@@ -179,15 +179,38 @@ class LocalMusicController(
         player = null
     }
 
+    suspend fun syncYandexLikesToLocal(): Int = withContext(Dispatchers.IO) {
+        if (!yandexClient.isConfigured() || yandexClient.isTemporarilyDown() || !yandexClient.isNetworkAllowed()) {
+            return@withContext 0
+        }
+        val remoteLikes = runCatching { yandexClient.fetchLikedTracks() }.getOrDefault(emptyList())
+        if (remoteLikes.isEmpty()) return@withContext 0
+
+        val existingKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
+        var added = 0
+        for (meta in remoteLikes) {
+            val key = MusicMemoryDb.trackKey(meta.artist, meta.title)
+            if (key.isNotBlank() && key !in existingKeys) {
+                runCatching {
+                    memoryDb.addLike("ya_${meta.id}", meta.artist, meta.title)
+                    added++
+                }
+            }
+        }
+        added
+    }
+
     suspend fun refreshLibrary(): Int {
         val (scanned, matchedLikedIds) = withContext(Dispatchers.IO) {
             runCatching { memoryDb.seedInitialLikesIfNeeded() }
+            runCatching { syncYandexLikesToLocal() }
             val list = scanner.scan()
             val likedIds = runCatching { memoryDb.getLikedTrackIds() }.getOrDefault(emptySet())
             val likedKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
             val matched = list
                 .filter { track ->
                     track.id in likedIds ||
+                        "ya_${track.id}" in likedIds ||
                         MusicMemoryDb.trackKey(track.artist, track.title) in likedKeys
                 }
                 .map { it.id }
@@ -227,18 +250,21 @@ class LocalMusicController(
 
     val yandexClient = YandexMusicClient(context)
     private val yandexBridge = YandexQueueBridge(yandexClient, waveEngine.coordinator)
-    @Volatile private var isWaveMode: Boolean = false
+
+    @Volatile
+    private var isWaveMode: Boolean = false
 
     fun setYandexToken(token: String) = yandexClient.setToken(token)
     fun getYandexToken(): String = yandexClient.getToken()
     fun isYandexConfigured(): Boolean = yandexClient.isConfigured()
 
     private fun triggerWavePrefetchIfNeeded() {
-        if (!isWaveMode) return
+        if (!isWaveMode || currentWaveSettings.character == WaveCharacter.FAVORITES) return
         yandexBridge.ensureWavePrefetch(
             scope = scope,
             stationId = "user:onyourwave",
             languageFilter = currentWaveSettings.languageFilter,
+            genreFilter = currentWaveSettings.genreFilter,
             currentQueue = { queue },
             currentIndex = { currentIndex },
             localTracksProvider = { scanner.allTracks() },
@@ -258,13 +284,44 @@ class LocalMusicController(
         )
     }
 
+    private fun rebuildWaveTailAfterSkip() {
+        if (!isWaveMode || currentIndex < 0 || currentIndex >= queue.lastIndex) return
+        val playedAndCurrent = queue.take(currentIndex + 1)
+        val remainingCount = (queue.size - playedAndCurrent.size).coerceAtLeast(10)
+        val freshTail = waveEngine.buildWaveQueue(
+            allTracks = scanner.allTracks(),
+            settings = currentWaveSettings,
+            size = remainingCount,
+        )
+        if (freshTail.isNotEmpty()) {
+            val usedIds = playedAndCurrent.map { it.id }.toSet()
+            val filteredTail = freshTail.filterNot { it.id in usedIds }
+            if (filteredTail.isNotEmpty()) {
+                queue = playedAndCurrent + filteredTail
+                originalQueue = queue
+                waveEngine.coordinator.registerQueueTracks(queue)
+                _uiState.update { it.copy(queue = queue) }
+            }
+        }
+    }
+
     fun playWave(languageFilter: String? = null): Boolean =
         playWave(WaveSettings(languageFilter = languageFilter))
 
     fun playWave(settings: WaveSettings): Boolean {
+        if (settings.character == WaveCharacter.FAVORITES) {
+            runCatching {
+                kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeoutOrNull(4_000L) {
+                        syncYandexLikesToLocal()
+                    }
+                }
+            }
+        }
         currentWaveSettings = settings
         isWaveMode = true
         yandexBridge.resetWaveSession()
+        waveEngine.resetSessionFeedback()
         waveEngine.coordinator.startNewWave(settings)
         val list = waveEngine.buildWaveQueue(scanner.allTracks(), settings)
         if (list.isEmpty()) return false
@@ -335,12 +392,20 @@ class LocalMusicController(
     }
 
     fun playLocalLiked(): Boolean {
+        runCatching {
+            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                kotlinx.coroutines.withTimeoutOrNull(4_000L) {
+                    syncYandexLikesToLocal()
+                }
+            }
+        }
         val likedIds = memoryDb.getLikedTrackIds()
         val likedKeys = memoryDb.getLikedTrackKeys()
         if (likedIds.isEmpty() && likedKeys.isEmpty()) return false
         val list = scanner.allTracks()
             .filter { track ->
                 track.id in likedIds ||
+                    "ya_${track.id}" in likedIds ||
                     MusicMemoryDb.trackKey(track.artist, track.title) in likedKeys
             }
             .shuffled()
@@ -437,8 +502,13 @@ class LocalMusicController(
             val secPlayed = (p.currentPosition / 1000L).toInt()
             val durSec = (current.durationMs / 1000L).toInt()
             if (durSec > 0 && secPlayed < (durSec * 0.7)) {
+                val ratio = (secPlayed.toFloat() / durSec.toFloat()).coerceIn(0f, 1f)
                 scope.launch(Dispatchers.IO) {
                     memoryDb.recordSkip(current.id, current.artist, current.title, secPlayed)
+                }
+                if (isWaveMode) {
+                    waveEngine.recordSessionSkip(current, ratio)
+                    rebuildWaveTailAfterSkip()
                 }
                 val appraisal = appraisalPolicy.onTrackSkipped(current.artist)
                 if (appraisal.shouldReact) {
@@ -529,6 +599,7 @@ class LocalMusicController(
     fun likeCurrent(): LocalTrack? {
         val track = currentTrack() ?: return null
         appraisalPolicy.onTrackFinishedOrLiked(track.artist)
+        waveEngine.recordSessionPositive(track)
         scope.launch(Dispatchers.IO) {
             memoryDb.addLike(track.id, track.artist, track.title)
         }
@@ -546,6 +617,7 @@ class LocalMusicController(
         val nowLiked = track.id !in _uiState.value.likedTrackIds
         if (nowLiked) {
             appraisalPolicy.onTrackFinishedOrLiked(track.artist)
+            waveEngine.recordSessionPositive(track)
         }
         scope.launch(Dispatchers.IO) {
             if (nowLiked) memoryDb.addLike(track.id, track.artist, track.title)
@@ -826,6 +898,7 @@ class LocalMusicController(
         val track = currentTrack()
         if (track != null) {
             appraisalPolicy.onTrackFinishedOrLiked(track.artist)
+            waveEngine.recordSessionPositive(track)
             scope.launch(Dispatchers.IO) {
                 runCatching {
                     memoryDb.recordFinish(track.id, track.artist, track.title, (track.durationMs / 1000L).toInt())

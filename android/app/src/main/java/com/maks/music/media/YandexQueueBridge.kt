@@ -16,6 +16,8 @@ class YandexQueueBridge(
 ) {
     private val bufferMutex = Mutex()
     private val waveBuffer = ArrayDeque<YandexTrackMeta>()
+    private var activeBufferKey: String = ""
+    private var stationFallbackIndex: Int = 0
     private val seenYandexIds = LinkedHashSet<String>()
     private var prefetchJob: Job? = null
 
@@ -26,6 +28,8 @@ class YandexQueueBridge(
             if (bufferMutex.tryLock()) {
                 try {
                     waveBuffer.clear()
+                    activeBufferKey = ""
+                    stationFallbackIndex = 0
                 } finally {
                     bufferMutex.unlock()
                 }
@@ -40,6 +44,7 @@ class YandexQueueBridge(
         scope: CoroutineScope,
         stationId: String = "user:onyourwave",
         languageFilter: String? = null,
+        genreFilter: String? = null,
         currentQueue: () -> List<LocalTrack>,
         currentIndex: () -> Int,
         localTracksProvider: () -> List<LocalTrack>,
@@ -77,8 +82,9 @@ class YandexQueueBridge(
                     if (readyAhead >= targetAhead) break
 
                     val nextTrack = fetchAndPrepareNextWaveTrack(
-                        stationId = stationId,
+                        defaultStationId = stationId,
                         languageFilter = languageFilter,
+                        genreFilter = genreFilter,
                         localTracks = localTracksProvider(),
                         blacklistedIds = blacklistedIdsProvider(),
                     ) ?: break
@@ -118,15 +124,29 @@ class YandexQueueBridge(
         else -> true
     }
 
+    private fun matchesGenreOrNeighbor(track: LocalTrack, genreFilter: String?): Boolean {
+        if (genreFilter.isNullOrBlank()) return true
+        // Если у трека из Яндекса пришёл пустой жанр, не бракуем его вслепую — станция уже жанровая
+        if (track.genre.isBlank() || track.genre.equals("yandex", ignoreCase = true)) return true
+        return GenreSimilarity.matchWeight(track, genreFilter) > 0.0
+    }
+
     private suspend fun fetchAndPrepareNextWaveTrack(
-        stationId: String,
+        defaultStationId: String,
         languageFilter: String?,
+        genreFilter: String?,
         localTracks: List<LocalTrack>,
         blacklistedIds: Set<String>,
     ): LocalTrack? {
-        val attempts = if (languageFilter != null) 14 else 6
+        val stationChain = if (!genreFilter.isNullOrBlank()) {
+            GenreSimilarity.yandexStationChain(genreFilter)
+        } else {
+            listOf(defaultStationId)
+        }
+
+        val attempts = if (languageFilter != null || genreFilter != null) 16 else 6
         repeat(attempts) {
-            val meta = popNextWaveMeta(stationId) ?: return null
+            val meta = popNextWaveMeta(stationChain) ?: return null
             val yaId = "$YA_PREFIX${meta.id}"
             if (yaId in blacklistedIds) return@repeat
 
@@ -135,6 +155,7 @@ class YandexQueueBridge(
                 resolved != null &&
                 resolved.id !in blacklistedIds &&
                 matchesLanguage(resolved, languageFilter) &&
+                matchesGenreOrNeighbor(resolved, genreFilter) &&
                 (coordinator?.acceptRemoteCandidate(
                     track = resolved,
                     blacklistedTracks = blacklistedIds,
@@ -146,12 +167,34 @@ class YandexQueueBridge(
         return null
     }
 
-    private suspend fun popNextWaveMeta(stationId: String): YandexTrackMeta? = bufferMutex.withLock {
+    private suspend fun popNextWaveMeta(stationChain: List<String>): YandexTrackMeta? = bufferMutex.withLock {
+        val chainKey = stationChain.joinToString("|")
+        if (activeBufferKey != chainKey) {
+            waveBuffer.clear()
+            activeBufferKey = chainKey
+            stationFallbackIndex = 0
+        }
+
         if (waveBuffer.isEmpty()) {
-            val fetched = client.fetchWaveTracks(stationId)
-            for (m in fetched) {
-                val isNew = synchronized(seenYandexIds) { seenYandexIds.add(m.id) }
-                if (isNew) waveBuffer.addLast(m)
+            // Перебираем станции от основного жанра к похожим, если Яндекс отдаёт пусто или повторы
+            for (offset in stationChain.indices) {
+                val idx = (stationFallbackIndex + offset) % stationChain.size
+                val targetStation = stationChain[idx]
+                val fetched = client.fetchWaveTracks(targetStation)
+                var addedCount = 0
+                for (m in fetched) {
+                    val isNew = synchronized(seenYandexIds) { seenYandexIds.add(m.id) }
+                    if (isNew) {
+                        waveBuffer.addLast(m)
+                        addedCount++
+                    }
+                }
+                if (addedCount > 0) {
+                    stationFallbackIndex = idx
+                    break
+                } else {
+                    Log.d(TAG, "Station $targetStation exhausted/empty, trying neighbor station")
+                }
             }
         }
         waveBuffer.removeFirstOrNull()
