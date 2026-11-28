@@ -179,25 +179,28 @@ class LocalMusicController(
         player = null
     }
 
-    suspend fun syncYandexLikesToLocal(): Int = withContext(Dispatchers.IO) {
+    suspend fun syncYandexLikesToLocal(): Int {
         if (!yandexClient.isConfigured() || yandexClient.isTemporarilyDown() || !yandexClient.isNetworkAllowed()) {
-            return@withContext 0
+            return 0
         }
-        val remoteLikes = runCatching { yandexClient.fetchLikedTracks() }.getOrDefault(emptyList())
-        if (remoteLikes.isEmpty()) return@withContext 0
+        val remoteLikes: List<YandexTrackMeta> = runCatching { yandexClient.fetchLikedTracks() }
+            .getOrDefault(emptyList())
+        if (remoteLikes.isEmpty()) return 0
 
-        val existingKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
-        var added = 0
-        for (meta in remoteLikes) {
-            val key = MusicMemoryDb.trackKey(meta.artist, meta.title)
-            if (key.isNotBlank() && key !in existingKeys) {
-                runCatching {
-                    memoryDb.addLike("ya_${meta.id}", meta.artist, meta.title)
-                    added++
+        return withContext(Dispatchers.IO) {
+            val existingKeys = runCatching { memoryDb.getLikedTrackKeys() }.getOrDefault(emptySet())
+            var added = 0
+            for (meta in remoteLikes) {
+                val key = MusicMemoryDb.trackKey(meta.artist, meta.title)
+                if (key.isNotBlank() && key !in existingKeys) {
+                    runCatching {
+                        memoryDb.addLike("ya_${meta.id}", meta.artist, meta.title)
+                        added++
+                    }
                 }
             }
+            added
         }
-        added
     }
 
     suspend fun refreshLibrary(): Int {
