@@ -106,6 +106,62 @@ class YandexMusicClient(context: Context) {
         }
     }
 
+    private fun getOrFetchUid(): String? {
+        prefs.getString(KEY_UID, "")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val body = httpGet("$BASE_URL/account/status") ?: return null
+        val uid = runCatching {
+            val root = json.parseToJsonElement(body).jsonObject
+            val account = root["result"]?.jsonObject?.get("account")?.jsonObject
+            account?.get("uid")?.jsonPrimitive?.contentOrNull
+                ?: account?.get("uid")?.jsonPrimitive?.intOrNull?.toString()
+        }.getOrNull()?.trim().orEmpty()
+        if (uid.isNotEmpty()) {
+            prefs.edit().putString(KEY_UID, uid).apply()
+            return uid
+        }
+        return null
+    }
+
+    suspend fun fetchLikedTracks(): List<YandexTrackMeta> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || isTemporarilyDown() || !isNetworkAllowed()) return@withContext emptyList()
+        val uid = getOrFetchUid() ?: return@withContext emptyList()
+        val body = httpGet("$BASE_URL/users/$uid/likes/tracks") ?: return@withContext emptyList()
+
+        val trackIds = runCatching {
+            val root = json.parseToJsonElement(body).jsonObject
+            val libraryObj = root["result"]?.jsonObject?.get("library")?.jsonObject
+            val tracksArr = libraryObj?.get("tracks")?.jsonArray
+                ?: root["result"]?.jsonObject?.get("tracks")?.jsonArray
+                ?: return@runCatching emptyList<String>()
+
+            tracksArr.mapNotNull { el ->
+                val obj = el as? JsonObject
+                obj?.get("id")?.jsonPrimitive?.contentOrNull
+                    ?: obj?.get("id")?.jsonPrimitive?.intOrNull?.toString()
+                    ?: runCatching { el.jsonPrimitive.contentOrNull }.getOrNull()
+            }.filter { it.isNotBlank() }.distinct()
+        }.onFailure { Log.w(TAG, "fetchLikedTracks ids parse error: ${it.message}") }
+            .getOrDefault(emptyList())
+
+        if (trackIds.isEmpty()) return@withContext emptyList()
+
+        val result = mutableListOf<YandexTrackMeta>()
+        for (chunk in trackIds.chunked(100)) {
+            val idsParam = chunk.joinToString(",")
+            val encoded = URLEncoder.encode(idsParam, "UTF-8")
+            val detailsBody = httpGet("$BASE_URL/tracks?track-ids=$encoded") ?: continue
+            runCatching {
+                val root = json.parseToJsonElement(detailsBody).jsonObject
+                val arr = root["result"]?.jsonArray ?: return@runCatching
+                for (item in arr) {
+                    val obj = item as? JsonObject ?: continue
+                    parseTrack(obj)?.let { result += it }
+                }
+            }.onFailure { Log.w(TAG, "fetchLikedTracks details parse error: ${it.message}") }
+        }
+        result
+    }
+
     fun isConfigured(): Boolean = getToken().isNotEmpty()
 
     fun isTemporarilyDown(): Boolean = System.currentTimeMillis() < blockedUntilMs
@@ -764,6 +820,7 @@ class YandexMusicClient(context: Context) {
         private const val USER_AGENT = "Yandex-Music-API"
         private const val PREFS_NAME = "yandex_music_prefs"
         private const val KEY_TOKEN = "oauth_token"
+        private const val KEY_UID = "cached_uid"
         private const val CONNECT_TIMEOUT_MS = 4_000
         private const val READ_TIMEOUT_MS = 6_000
         private const val DOWNLOAD_READ_TIMEOUT_MS = 20_000
